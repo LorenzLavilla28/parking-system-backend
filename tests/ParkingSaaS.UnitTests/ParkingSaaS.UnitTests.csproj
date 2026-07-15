@@ -1,0 +1,36 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- EphemeralDataProtectionProvider (used in token tests) ships in the shared framework. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ParkingSaaS.Domain\ParkingSaaS.Domain.csproj" />
+    <ProjectReference Include="..\..\src\ParkingSaaS.Application\ParkingSaaS.Application.csproj" />
+    <ProjectReference Include="..\..\src\ParkingSaaS.Infrastructure\ParkingSaaS.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\ParkingSaaS.Contracts\ParkingSaaS.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\ParkingSaaS.Api\ParkingSaaS.Api.csproj" />
+  </ItemGroup>
+
+</Project>

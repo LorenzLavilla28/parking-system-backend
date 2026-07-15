@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ParkingSaaS.Api/ParkingSaaS.Api.csproj" />
+    <Project Path="src/ParkingSaaS.Application/ParkingSaaS.Application.csproj" />
+    <Project Path="src/ParkingSaaS.Contracts/ParkingSaaS.Contracts.csproj" />
+    <Project Path="src/ParkingSaaS.Domain/ParkingSaaS.Domain.csproj" />
+    <Project Path="src/ParkingSaaS.Infrastructure/ParkingSaaS.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ParkingSaaS.UnitTests/ParkingSaaS.UnitTests.csproj" />
+  </Folder>
+</Solution>

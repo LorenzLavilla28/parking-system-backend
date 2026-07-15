@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+**/.vs/
+**/.idea/
+**/node_modules/
+**/dist/
+**/.git/
+**/*.user
+frontend/
+.env
+.env.*
+!.env.example

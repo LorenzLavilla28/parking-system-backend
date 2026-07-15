@@ -1,0 +1,11 @@
+.env
+
+# Visual Studio user-specific settings and caches
+.vs/
+
+# .NET build output
+bin/
+obj/
+
+# User-specific project files
+*.user
