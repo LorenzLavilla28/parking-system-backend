@@ -1,5 +1,5 @@
 # Portable local development stack for WSL, Linux, macOS, and Windows Docker
-# Desktop. Copy .env.example to .env at the repository root to override defaults.
+# Desktop. A root .env file is optional and can override the local test defaults.
 
 services:
   postgres:
@@ -33,37 +33,13 @@ services:
       Database__ResetOnStartup: ${DATABASE_RESET_ON_STARTUP:-false}
       Cors__AllowedOrigins__0: ${CORS_ALLOWED_ORIGIN:-http://localhost:5173}
       PublicUrls__BaseUrl: ${PUBLIC_BASE_URL:-http://localhost:5173}
-      PayMongo__SecretKey: ${PAYMONGO_SECRET_KEY:-}
-      PayMongo__WebhookSecret: ${PAYMONGO_WEBHOOK_SECRET:-}
-      # User-secrets do not exist in the container, so SMTP is off by default.
-      Email__Enabled: "${EMAIL_ENABLED:-false}"
-      Email__Host: "${EMAIL_HOST:-}"
-      Email__Port: "${EMAIL_PORT:-587}"
-      Email__UseSsl: "${EMAIL_USE_SSL:-true}"
-      Email__Username: "${EMAIL_USERNAME:-}"
-      Email__Password: "${EMAIL_PASSWORD:-}"
-      Email__FromAddress: "${EMAIL_FROM_ADDRESS:-no-reply@parking.local}"
-      Email__FromName: "${EMAIL_FROM_NAME:-ParkingSaaS}"
-      Email__AppBaseUrl: "${EMAIL_APP_BASE_URL:-http://localhost:5173}"
+      # PayMongo and other test settings are read from appsettings.json.
     ports:
-      - "${API_PORT:-8080}:8080"
+      # Keep the host port aligned with the existing frontend/local launch URL.
+      - "${API_PORT:-5274}:8080"
     volumes:
       - dpkeys:/app/dp-keys
-
-  # Optional local S3-compatible object storage for future plate photos/evidence.
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-    ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
-    volumes:
-      - miniodata:/data
 
 volumes:
   pgdata:
   dpkeys:
-  miniodata:

@@ -64,7 +64,7 @@ To skip email entirely instead, set `Email:Enabled` to `false` in
 ## Docker
 
 `deploy/docker-compose.yml` is a portable development stack for WSL, Linux, macOS, and
-Windows Docker Desktop. It starts PostgreSQL, the API, and a MinIO S3-compatible service.
+Windows Docker Desktop. It starts PostgreSQL and the API.
 
 ### Running from WSL
 
@@ -72,21 +72,22 @@ Install Docker Desktop on the host, enable its WSL 2 integration for your distri
 run these commands from the repository root in WSL:
 
 ```bash
-cp .env.example .env
 docker compose -f deploy/docker-compose.yml config
 docker compose -f deploy/docker-compose.yml up --build
 ```
 
-The API is available at <http://localhost:8080>, PostgreSQL at `localhost:5432`, and the
-MinIO console at <http://localhost:9001>. If a port is already in use, change the matching
-value in `.env`. Named volumes keep the database, MinIO data, and API Data Protection keys
-across container restarts.
+The root `.env` file is optional. The Compose stack uses the PayMongo test credentials
+bundled in `appsettings.json` unless you provide overrides.
+
+The API is available at <http://localhost:5274> and PostgreSQL at `localhost:5432`. If a
+port is already in use, change the matching value in `.env`. Named volumes keep the database
+and API Data Protection keys across container restarts.
 
 Stop the stack with `Ctrl+C`, or run `docker compose -f deploy/docker-compose.yml down` from
 another WSL session. Add `-v` only when you intentionally want to delete persisted data.
 
-`deploy/docker-compose.yml` defines PostgreSQL, the API, and a MinIO S3 emulator. It needs a
-running Docker daemon and the Compose v2 plugin — a standalone `docker` CLI is not enough.
+`deploy/docker-compose.yml` defines PostgreSQL and the API. It needs a running Docker daemon
+and the Compose v2 plugin — a standalone `docker` CLI is not enough.
 
 ### Running PostgreSQL in Docker
 
@@ -104,7 +105,7 @@ dotnet run --project src/ParkingSaaS.Api --launch-profile http
 docker compose -f deploy/docker-compose.yml up --build
 ```
 
-The API is then on <http://localhost:8080>. User-secrets do not exist inside the container,
+The API is then on <http://localhost:5274>. User-secrets do not exist inside the container,
 so SMTP stays off unless you put the credentials in `.env` first:
 
 ```bash

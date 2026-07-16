@@ -15,16 +15,15 @@ RUN dotnet restore src/ParkingSaaS.Api/ParkingSaaS.Api.csproj
 
 COPY . .
 RUN dotnet publish src/ParkingSaaS.Api/ParkingSaaS.Api.csproj -c Release -o /app --no-restore
+# Keep the mounted Data Protection directory writable by the built-in .NET app user.
+RUN mkdir -p /app/dp-keys
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
-# Run as a non-root user.
-RUN adduser --disabled-password --gecos "" appuser
-COPY --chown=appuser:appuser --from=build /app .
-RUN mkdir -p /app/dp-keys && chown -R appuser:appuser /app
-
-USER appuser
+# .NET Linux images include the non-root `app` user (UID 1654).
+COPY --chown=1654:1654 --from=build /app .
+USER 1654
 
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
