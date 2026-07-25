@@ -105,6 +105,9 @@ public sealed class FakeSessionPricingService : ISessionPricingService
     public Task<FeeCalculationResult?> CalculateAsync(
         ParkingSession session, DateTimeOffset at, DiscountInput? discount, CancellationToken ct)
         => Task.FromResult(Result);
+
+    public Task<int> GetPaidExitGraceMinutesAsync(ParkingSession session, CancellationToken ct)
+        => Task.FromResult(15);
 }
 
 /// <summary>Payment gateway whose responses the test controls and whose calls it inspects.</summary>

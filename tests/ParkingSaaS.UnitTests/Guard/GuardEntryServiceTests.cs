@@ -27,6 +27,7 @@ public sealed class GuardEntryServiceTests
     private readonly FakeSessionRealtimeNotifier _realtime = new();
     private readonly AppDbContext _db;
     private readonly GuardEntryService _service;
+    private readonly FakeActiveRatePlanResolver _ratePlans = new() { VersionId = Guid.NewGuid() };
     private ParkingLocation _location = null!;
 
     public GuardEntryServiceTests()
@@ -45,7 +46,7 @@ public sealed class GuardEntryServiceTests
 
         _service = new GuardEntryService(
             _db, _user, new PlateNormalizer(), tokens, new FakeQrCodeGenerator(),
-            new FakeActiveRatePlanResolver(), new TestClock(DateTimeOffset.UtcNow), _realtime, urls,
+            _ratePlans, new TestClock(DateTimeOffset.UtcNow), _realtime, urls,
             NullLogger<GuardEntryService>.Instance);
 
         SeedLocation();
@@ -54,8 +55,21 @@ public sealed class GuardEntryServiceTests
     private void SeedLocation()
     {
         _location = new ParkingLocation(_tenantId, "Lot", "lot", "Asia/Manila", null);
+        _location.AssignRatePlan(Guid.NewGuid());
         _db.ParkingLocations.Add(_location);
         _db.SaveChanges();
+    }
+
+    [Fact]
+    public async Task Rejects_entry_when_location_has_no_rate_plan()
+    {
+        _location.AssignRatePlan(null);
+
+        var act = () => _service.RecordEntryAsync(
+            new RecordEntryRequest(_location.Id, "ABC 1234", "Car", null, null), CancellationToken.None);
+
+        await act.Should().ThrowAsync<ConflictException>()
+            .WithMessage("*rate_plan_required*");
     }
 
     [Fact]
@@ -73,6 +87,20 @@ public sealed class GuardEntryServiceTests
         saved.Status.Should().Be(ParkingSessionStatus.ActiveUnpaid);
         saved.PlateNumberNormalized.Should().Be("ABC1234");
         saved.PublicTokenHash.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task Rejects_entry_when_location_capacity_is_reached()
+    {
+        _location.SetSlotCapacity(1);
+
+        await _service.RecordEntryAsync(new RecordEntryRequest(_location.Id, "ABC 1234", "Car", "Red", null), CancellationToken.None);
+
+        var act = () => _service.RecordEntryAsync(
+            new RecordEntryRequest(_location.Id, "XYZ 9876", "Car", "Blue", null), CancellationToken.None);
+
+        await act.Should().ThrowAsync<ConflictException>()
+            .WithMessage("*location_at_capacity*");
     }
 
     [Fact]

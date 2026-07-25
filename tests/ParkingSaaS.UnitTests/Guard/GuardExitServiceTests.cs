@@ -36,16 +36,16 @@ public sealed class GuardExitServiceTests
         _service = new GuardExitService(_db, _user, _pricing, audit, _clock, _realtime, NullLogger<GuardExitService>.Instance);
 
         _location = new ParkingLocation(_tenantId, "Lot", "lot", "Asia/Manila", null);
-        _location.UpdateDetails(null, "Asia/Manila", 15, true);
+        _location.UpdateDetails(null, "Asia/Manila", true);
         _db.ParkingLocations.Add(_location);
         _db.SaveChanges();
     }
 
-    private ParkingSession AddSession(decimal totalPaid = 0m, bool exited = false)
+    private ParkingSession AddSession(decimal totalPaid = 0m, bool exited = false, DateTimeOffset? deadline = null)
     {
         var s = ParkingSession.RecordEntry(_tenantId, _location.Id, Guid.NewGuid(), "ABC1234", "ABC1234", VehicleType.Car, null, _clock.UtcNow.AddHours(-4), null);
         s.AssignTokens("h", "p", "th", "tp");
-        if (totalPaid > 0m) s.RegisterPayment(totalPaid, _clock.UtcNow.AddMinutes(15));
+        if (totalPaid > 0m) s.RegisterPayment(totalPaid, deadline ?? _clock.UtcNow.AddMinutes(15));
         if (exited) s.ApproveExit(Guid.NewGuid(), _clock.UtcNow, 0m, null);
         _db.ParkingSessions.Add(s);
         _db.SaveChanges();
@@ -166,5 +166,40 @@ public sealed class GuardExitServiceTests
         var act = async () => await _service.ApproveExitAsync(
             new ApproveExitRequest(s.Id, null, null, "let me out"), null, CancellationToken.None);
         await act.Should().ThrowAsync<ForbiddenException>();
+    }
+
+    [Fact]
+    public async Task Overdue_session_cannot_be_forced_out_with_supervisor_override()
+    {
+        var s = AddSession(totalPaid: 70m, deadline: _clock.UtcNow.AddMinutes(-1));
+        _pricing.Result = FeeResults.Of(90m);
+
+        var status = await _service.GetExitStatusAsync(s.Id, CancellationToken.None);
+        status.Status.Should().Be(nameof(ParkingSessionStatus.OverstayDue));
+        status.CanApproveExit.Should().BeFalse();
+
+        var act = async () => await _service.ApproveExitAsync(
+            new ApproveExitRequest(s.Id, null, null, "manual release"), null, CancellationToken.None);
+        await act.Should().ThrowAsync<ConflictException>()
+            .WithMessage("This session is overdue. The outstanding balance must be paid before exit.");
+    }
+
+    [Fact]
+    public async Task Overdue_session_is_not_paid_even_when_current_fee_equals_amount_paid()
+    {
+        var s = AddSession(totalPaid: 50m, deadline: _clock.UtcNow.AddMinutes(-1));
+        _pricing.Result = FeeResults.Of(50m);
+
+        var status = await _service.GetExitStatusAsync(s.Id, CancellationToken.None);
+
+        status.Status.Should().Be(nameof(ParkingSessionStatus.OverstayDue));
+        status.Decision.Should().Be("AdditionalPaymentRequired");
+        status.Outstanding.Should().Be(0m);
+        status.CanApproveExit.Should().BeFalse();
+
+        var act = async () => await _service.ApproveExitAsync(
+            new ApproveExitRequest(s.Id, null, null, null), null, CancellationToken.None);
+        await act.Should().ThrowAsync<ConflictException>()
+            .WithMessage("This session is overdue. The outstanding balance must be paid before exit.");
     }
 }

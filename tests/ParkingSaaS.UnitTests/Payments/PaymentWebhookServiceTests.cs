@@ -37,14 +37,14 @@ public sealed class PaymentWebhookServiceTests
         _tenant.ScopeTo(_tenantId);
         _db = InMemoryDb.Create(_tenant);
         _service = new PaymentWebhookService(
-            _db, _gateway, new PaymentSettler(_db, TestEmail.Queue(_db)), _tokens, _clock, _realtime, NullLogger<PaymentWebhookService>.Instance);
+            _db, _gateway, new PaymentSettler(_db, TestEmail.Queue(_db), new FakeSessionPricingService()), _tokens, _clock, _realtime, NullLogger<PaymentWebhookService>.Instance);
         Seed();
     }
 
     private void Seed()
     {
         _location = new ParkingLocation(_tenantId, "Lot", "lot", "Asia/Manila", null);
-        _location.UpdateDetails(null, "Asia/Manila", exitGraceMinutes: 15, allowCashPayment: true);
+        _location.UpdateDetails(null, "Asia/Manila", allowCashPayment: true);
         _db.ParkingLocations.Add(_location);
 
         _session = ParkingSession.RecordEntry(_tenantId, _location.Id, Guid.NewGuid(), "ABC1234", "ABC1234",

@@ -31,6 +31,10 @@ public sealed record SessionSummaryResponse(
     string? VehicleColor,
     DateTimeOffset EntryTime,
     string Status,
+    bool PricingAvailable,
+    string Currency,
+    decimal CurrentFee,
+    decimal Outstanding,
     decimal? FinalFee,
     decimal TotalPaid,
     DateTimeOffset? PaidExitDeadline);

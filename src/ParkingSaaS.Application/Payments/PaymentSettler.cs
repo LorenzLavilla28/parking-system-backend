@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using ParkingSaaS.Application.Abstractions;
+using ParkingSaaS.Application.Pricing;
 using ParkingSaaS.Domain.Payments;
 using ParkingSaaS.Domain.Pricing;
 
@@ -15,11 +16,13 @@ public sealed class PaymentSettler : IPaymentSettler
 {
     private readonly IApplicationDbContext _db;
     private readonly IEmailQueue _emailQueue;
+    private readonly ISessionPricingService _pricing;
 
-    public PaymentSettler(IApplicationDbContext db, IEmailQueue emailQueue)
+    public PaymentSettler(IApplicationDbContext db, IEmailQueue emailQueue, ISessionPricingService pricing)
     {
         _db = db;
         _emailQueue = emailQueue;
+        _pricing = pricing;
     }
 
     public async Task<SettlementResult?> SettleAsync(
@@ -36,9 +39,9 @@ public sealed class PaymentSettler : IPaymentSettler
         var location = await _db.ParkingLocations
             .IgnoreQueryFilters()
             .Where(l => l.Id == session.ParkingLocationId)
-            .Select(l => new { l.ExitGraceMinutes, l.Name })
+            .Select(l => new { l.Name })
             .FirstOrDefaultAsync(ct);
-        var graceMinutes = location?.ExitGraceMinutes ?? 0;
+        var graceMinutes = await _pricing.GetPaidExitGraceMinutesAsync(session, ct);
 
         payment.MarkPaid(providerPaymentId, method, paidAt);
 

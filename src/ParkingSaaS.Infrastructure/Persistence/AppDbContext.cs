@@ -77,4 +77,47 @@ public sealed class AppDbContext : DbContext, IApplicationDbContext
 
     public new Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         => base.SaveChangesAsync(cancellationToken);
+
+    public async Task ExecuteInTransactionAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default)
+    {
+        // EF Core's in-memory provider does not support transactions; unit tests
+        // still exercise the same operation body without the database lock.
+        if (Database.ProviderName?.Contains("InMemory", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            await operation(cancellationToken);
+            return;
+        }
+
+        await using var transaction = await Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            await operation(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task LockLocationAsync(Guid locationId, CancellationToken cancellationToken = default)
+    {
+        if (Database.ProviderName?.Contains("InMemory", StringComparison.OrdinalIgnoreCase) == true)
+            return;
+
+        await Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT 1 FROM parking_locations WHERE \"Id\" = {locationId} FOR UPDATE",
+            cancellationToken);
+    }
+
+    public async Task LockTenantAsync(Guid tenantId, CancellationToken cancellationToken = default)
+    {
+        if (Database.ProviderName?.Contains("InMemory", StringComparison.OrdinalIgnoreCase) == true)
+            return;
+
+        await Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT 1 FROM tenants WHERE \"Id\" = {tenantId} FOR UPDATE",
+            cancellationToken);
+    }
 }

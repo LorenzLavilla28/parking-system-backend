@@ -38,7 +38,7 @@ public sealed class CustomerPaymentServiceTests
         _tenant.ScopeTo(_tenantId);
         _db = InMemoryDb.Create(_tenant);
         _service = new CustomerPaymentService(
-            _db, _gateway, new PaymentSettler(_db, TestEmail.Queue(_db)), _tokens, _clock, _realtime,
+            _db, _gateway, new PaymentSettler(_db, TestEmail.Queue(_db), new FakeSessionPricingService()), _tokens, _clock, _realtime,
             Options.Create(new PublicUrlOptions { BaseUrl = "http://test.local" }),
             NullLogger<CustomerPaymentService>.Instance);
     }

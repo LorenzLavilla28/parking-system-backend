@@ -39,7 +39,7 @@ public sealed class RatePlanService : IRatePlanService
         await _db.RatePlanVersions.AddAsync(version, ct);
 
         await _db.SaveChangesAsync(ct);
-        return ToResponse(plan, version.VersionNumber);
+        return ToResponse(plan, version.VersionNumber, PricingRules.Parse(rulesJson).PaidExitGraceMinutes, rulesJson);
     }
 
     public async Task<RatePlanVersionResponse> AddVersionAsync(Guid ratePlanId, AddRatePlanVersionRequest request, CancellationToken ct)
@@ -74,8 +74,8 @@ public sealed class RatePlanService : IRatePlanService
     {
         var plan = await _db.RatePlans.AsNoTracking().FirstOrDefaultAsync(p => p.Id == id, ct)
             ?? throw new NotFoundException("Rate plan not found.");
-        var current = await CurrentVersionNumberAsync(plan.Id, ct);
-        return ToResponse(plan, current);
+        var current = await CurrentVersionAsync(plan.Id, ct);
+        return ToResponse(plan, current.VersionNumber, current.PaidExitGraceMinutes, current.RulesJson);
     }
 
     public async Task<PagedResult<RatePlanResponse>> ListAsync(Guid? parkingLocationId, PageQuery page, CancellationToken ct)
@@ -93,13 +93,19 @@ public sealed class RatePlanService : IRatePlanService
             .ToListAsync(ct);
 
         var planIds = plans.Select(p => p.Id).ToList();
-        var currentNumbers = await _db.RatePlanVersions
+        var currentVersions = await _db.RatePlanVersions
             .Where(v => planIds.Contains(v.RatePlanId) && v.EffectiveTo == null)
-            .Select(v => new { v.RatePlanId, v.VersionNumber })
+            .Select(v => new { v.RatePlanId, v.VersionNumber, v.RulesJson })
             .ToListAsync(ct);
-        var lookup = currentNumbers.ToDictionary(x => x.RatePlanId, x => (int?)x.VersionNumber);
+        var lookup = currentVersions.ToDictionary(
+            x => x.RatePlanId,
+            x => (VersionNumber: (int?)x.VersionNumber, PaidExitGraceMinutes: (int?)PricingRules.Parse(x.RulesJson).PaidExitGraceMinutes, RulesJson: x.RulesJson));
 
-        var items = plans.Select(p => ToResponse(p, lookup.GetValueOrDefault(p.Id))).ToArray();
+        var items = plans.Select(p =>
+        {
+            var current = lookup.GetValueOrDefault(p.Id);
+            return ToResponse(p, current.VersionNumber, current.PaidExitGraceMinutes, current.RulesJson);
+        }).ToArray();
         return new PagedResult<RatePlanResponse>(items, page.NormalizedPage, page.NormalizedPageSize, total);
     }
 
@@ -149,14 +155,19 @@ public sealed class RatePlanService : IRatePlanService
         return rules.Serialize();
     }
 
-    private async Task<int?> CurrentVersionNumberAsync(Guid planId, CancellationToken ct)
-        => await _db.RatePlanVersions
+    private async Task<(int? VersionNumber, int? PaidExitGraceMinutes, string? RulesJson)> CurrentVersionAsync(Guid planId, CancellationToken ct)
+    {
+        var current = await _db.RatePlanVersions
             .Where(v => v.RatePlanId == planId && v.EffectiveTo == null)
-            .Select(v => (int?)v.VersionNumber)
+            .Select(v => new { v.VersionNumber, v.RulesJson })
             .FirstOrDefaultAsync(ct);
+        return current is null
+            ? (null, null, null)
+            : ((int?)current.VersionNumber, PricingRules.Parse(current.RulesJson).PaidExitGraceMinutes, current.RulesJson);
+    }
 
-    private static RatePlanResponse ToResponse(RatePlan p, int? currentVersion) => new(
-        p.Id, p.ParkingLocationId, p.Name, p.Description, p.Status.ToString(), currentVersion, p.CreatedAt, p.UpdatedAt);
+    private static RatePlanResponse ToResponse(RatePlan p, int? currentVersion, int? paidExitGraceMinutes, string? rulesJson) => new(
+        p.Id, p.ParkingLocationId, p.Name, p.Description, p.Status.ToString(), currentVersion, paidExitGraceMinutes, p.CreatedAt, p.UpdatedAt, rulesJson);
 
     private static RatePlanVersionResponse ToVersionResponse(RatePlanVersion v) => new(
         v.Id, v.RatePlanId, v.VersionNumber, v.EffectiveFrom, v.EffectiveTo, v.RulesJson, v.CreatedAt);

@@ -70,8 +70,8 @@ public sealed class PricingRules
     /// <summary>Free if the stay is within this many minutes of entry.</summary>
     public int EntryGraceMinutes { get; set; }
 
-    /// <summary>Optional per-plan override of the location's paid-exit grace.</summary>
-    public int? PaidExitGraceMinutes { get; set; }
+    /// <summary>Minutes allowed after successful payment to complete the exit.</summary>
+    public int PaidExitGraceMinutes { get; set; } = 15;
 
     public RateBlock Default { get; set; } = new();
 
@@ -87,7 +87,6 @@ public sealed class PricingRules
     /// <summary>Local calendar dates (yyyy-MM-dd) treated as holidays.</summary>
     public List<string> Holidays { get; set; } = new();
 
-    public decimal? DailyMax { get; set; }
     public OvernightRule? Overnight { get; set; }
     public decimal? LostTicketFee { get; set; }
 
@@ -115,7 +114,8 @@ public sealed class PricingRules
         if (string.IsNullOrWhiteSpace(Currency) || Currency.Length != 3)
             errors.Add("Currency must be a 3-letter ISO code.");
         if (EntryGraceMinutes < 0) errors.Add("EntryGraceMinutes cannot be negative.");
-        if (DailyMax is < 0) errors.Add("DailyMax cannot be negative.");
+        if (PaidExitGraceMinutes < 0) errors.Add("PaidExitGraceMinutes cannot be negative.");
+        if (PaidExitGraceMinutes > 720) errors.Add("PaidExitGraceMinutes cannot exceed 720 minutes.");
         if (LostTicketFee is < 0) errors.Add("LostTicketFee cannot be negative.");
 
         ValidateBlock(Default, "Default", errors);

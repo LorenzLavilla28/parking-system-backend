@@ -31,9 +31,20 @@ public sealed class PaymentReconciliationServiceTests
         _tenant.ScopeTo(_tenantId);
         _db = InMemoryDb.Create(_tenant);
         _service = new PaymentReconciliationService(
-            _db, _gateway, new PaymentSettler(_db, TestEmail.Queue(_db)), _clock, _realtime,
+            _db, _gateway, new PaymentSettler(_db, TestEmail.Queue(_db), new FakeSessionPricingService()), _clock, _realtime,
             Options.Create(new PayMongoOptions { ReconcilePendingOlderThanMinutes = 3 }),
-            NullLogger<PaymentReconciliationService>.Instance);
+            NullLogger<PaymentReconciliationService>.Instance,
+            TestEmail.Queue(_db), new FakeParkingTokenService(), new FakeQrCodeGenerator(),
+            Options.Create(new PublicUrlOptions { BaseUrl = "https://parking.test" }));
+    }
+
+    private sealed class FakeParkingTokenService : IParkingTokenService
+    {
+        public string GeneratePublicToken() => "token";
+        public string GenerateTicketCode() => "TICKET";
+        public string Hash(string value) => value;
+        public string Protect(string value) => value;
+        public string Unprotect(string protectedValue) => protectedValue;
     }
 
     private Payment SeedPendingPayment()

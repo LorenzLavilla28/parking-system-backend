@@ -18,7 +18,7 @@ public sealed class CreateLocationRequestValidator : AbstractValidator<CreateLoc
             .Matches(SlugRules.Pattern).WithMessage("Slug must be lowercase alphanumeric words separated by hyphens.");
         RuleFor(x => x.Timezone).NotEmpty().MaximumLength(64);
         RuleFor(x => x.Address).MaximumLength(500);
-        RuleFor(x => x.ExitGraceMinutes).InclusiveBetween(0, 720);
+        RuleFor(x => x.SlotCapacity).InclusiveBetween(1, 100000);
     }
 }
 
@@ -29,6 +29,6 @@ public sealed class UpdateLocationRequestValidator : AbstractValidator<UpdateLoc
         RuleFor(x => x.Name).NotEmpty().MaximumLength(200);
         RuleFor(x => x.Timezone).NotEmpty().MaximumLength(64);
         RuleFor(x => x.Address).MaximumLength(500);
-        RuleFor(x => x.ExitGraceMinutes).InclusiveBetween(0, 720);
+        RuleFor(x => x.SlotCapacity).InclusiveBetween(1, 100000);
     }
 }

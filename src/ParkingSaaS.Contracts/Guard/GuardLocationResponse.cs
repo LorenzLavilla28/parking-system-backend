@@ -6,4 +6,5 @@ public sealed record GuardLocationResponse(
     string Name,
     string Slug,
     string Timezone,
-    bool AllowCashPayment);
+    bool AllowCashPayment,
+    int SlotCapacity);

@@ -9,16 +9,16 @@ public sealed record CreateTenantRequest(
     string AdminFirstName,
     string AdminLastName,
     string AdminEmail,
-    string AdminPassword,
-    CreateTenantLocationRequest? FirstLocation = null);
+    string AdminPassword);
 
-public sealed record CreateTenantLocationRequest(
+public sealed record CreateTenantAddOnLocationRequest(
     string Name,
     string Slug,
     string? Address,
     string Timezone,
-    int ExitGraceMinutes,
-    bool AllowCashPayment);
+    int SlotCapacity,
+    bool AllowCashPayment = true,
+    decimal? MonthlyPrice = null);
 
 public sealed record UpdateTenantStatusRequest(string Status);
 
@@ -30,11 +30,8 @@ public sealed record TenantResponse(
     string SubscriptionPlan,
     string DefaultCurrency,
     string DefaultTimezone,
+    int? MaximumLocations,
+    int? MaximumSlotsPerLocation,
+    decimal? MonthlyPrice,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt,
-    TenantOnboardingLocationResponse? FirstLocation = null);
-
-public sealed record TenantOnboardingLocationResponse(
-    Guid Id,
-    string Name,
-    string Slug);
+    DateTimeOffset UpdatedAt);

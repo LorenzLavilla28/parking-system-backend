@@ -23,8 +23,14 @@ public class ParkingLocation : AuditableEntity, ITenantOwned
     public string Timezone { get; private set; } = "Asia/Manila";
     public LocationStatus Status { get; private set; } = LocationStatus.Active;
 
-    /// <summary>Minutes a customer has to leave after paying before overstay applies.</summary>
-    public int ExitGraceMinutes { get; private set; } = 15;
+    /// <summary>Maximum number of simultaneously parked vehicles at this location.</summary>
+    public int SlotCapacity { get; private set; } = 20;
+
+    /// <summary>True when this location is an additional platform-approved paid add-on.</summary>
+    public bool IsAddOn { get; private set; }
+
+    /// <summary>Monthly PHP price for an add-on location; null for included locations.</summary>
+    public decimal? MonthlyPrice { get; private set; }
 
     public bool AllowCashPayment { get; private set; } = true;
     public Guid? ActiveRatePlanId { get; private set; }
@@ -34,7 +40,15 @@ public class ParkingLocation : AuditableEntity, ITenantOwned
 
     private ParkingLocation() { }
 
-    public ParkingLocation(Guid tenantId, string name, string slug, string timezone, string? address)
+    public ParkingLocation(
+        Guid tenantId,
+        string name,
+        string slug,
+        string timezone,
+        string? address,
+        int slotCapacity = 20,
+        bool isAddOn = false,
+        decimal? monthlyPrice = null)
     {
         if (tenantId == Guid.Empty)
             throw new DomainException("location.tenant_required", "A location must belong to a tenant.");
@@ -43,6 +57,11 @@ public class ParkingLocation : AuditableEntity, ITenantOwned
         SetSlug(slug);
         Timezone = string.IsNullOrWhiteSpace(timezone) ? "Asia/Manila" : timezone.Trim();
         Address = address?.Trim();
+        SetSlotCapacity(slotCapacity);
+        IsAddOn = isAddOn;
+        MonthlyPrice = monthlyPrice;
+        if (isAddOn && monthlyPrice is null)
+            throw new DomainException("location.addon_price_required", "An add-on location must have a monthly price.");
         Status = LocationStatus.Active;
     }
 
@@ -60,15 +79,21 @@ public class ParkingLocation : AuditableEntity, ITenantOwned
         Slug = slug.Trim().ToLowerInvariant();
     }
 
-    public void UpdateDetails(string? address, string timezone, int exitGraceMinutes, bool allowCashPayment)
+    public void UpdateDetails(string? address, string timezone, bool allowCashPayment, int? slotCapacity = null)
     {
         Address = address?.Trim();
         if (!string.IsNullOrWhiteSpace(timezone))
             Timezone = timezone.Trim();
-        if (exitGraceMinutes < 0)
-            throw new DomainException("location.grace_invalid", "Exit grace minutes cannot be negative.");
-        ExitGraceMinutes = exitGraceMinutes;
         AllowCashPayment = allowCashPayment;
+        if (slotCapacity.HasValue)
+            SetSlotCapacity(slotCapacity.Value);
+    }
+
+    public void SetSlotCapacity(int slotCapacity)
+    {
+        if (slotCapacity is < 1 or > 100000)
+            throw new DomainException("location.capacity_invalid", "Slot capacity must be between 1 and 100,000.");
+        SlotCapacity = slotCapacity;
     }
 
     public void SetPublicQrCodeUrl(string url) => PublicQrCodeUrl = url;

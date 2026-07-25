@@ -31,7 +31,7 @@ public sealed class PaymentTrackingServiceTests
         db.Payments.Add(payment);
         await db.SaveChangesAsync();
 
-        var service = new PaymentTrackingService(db);
+        var service = new PaymentTrackingService(db, new FakeSessionPricingService(), new TestClock(DateTimeOffset.UtcNow));
         var result = await service.SearchAsync(new PaymentQueryRequest { Search = "ABC1234" }, CancellationToken.None);
 
         result.TotalCount.Should().Be(1);

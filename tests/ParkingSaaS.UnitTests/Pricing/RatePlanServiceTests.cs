@@ -41,7 +41,7 @@ public sealed class RatePlanServiceTests
     {
         Currency = "PHP",
         EntryGraceMinutes = 15,
-        DailyMax = 250m,
+        PaidExitGraceMinutes = 15,
         Default = new RateBlock { Type = RateType.FirstBlock, FirstHours = 3, FirstAmount = 50m, IncrementAmount = 20m }
     }.Serialize();
 

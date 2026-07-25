@@ -7,6 +7,7 @@ using ParkingSaaS.Application.Common.Options;
 using ParkingSaaS.Application.Pricing;
 using ParkingSaaS.Contracts.Guard;
 using ParkingSaaS.Contracts.Realtime;
+using ParkingSaaS.Domain.Locations;
 using ParkingSaaS.Domain.Sessions;
 using ParkingSaaS.Domain.Services;
 
@@ -66,56 +67,78 @@ public sealed class GuardEntryService : IGuardEntryService
         if (string.IsNullOrEmpty(normalized))
             throw new ConflictException("Plate number is empty after normalization.");
 
-        // Friendly pre-check for an existing active session. The partial unique
-        // index is the authoritative guard against the race below.
-        var duplicate = await _db.ParkingSessions.AnyAsync(s =>
-            s.ParkingLocationId == request.ParkingLocationId &&
-            s.PlateNumberNormalized == normalized &&
-            (s.Status == ParkingSessionStatus.ActiveUnpaid ||
-             s.Status == ParkingSessionStatus.PaymentPending ||
-             s.Status == ParkingSessionStatus.PaidExitWindow ||
-             s.Status == ParkingSessionStatus.OverstayDue), ct);
-        if (duplicate)
-            throw new ConflictException("An active session already exists for this plate at this location.");
+        ParkingLocation location = null!;
+        ParkingSession session = null!;
+        string publicToken = string.Empty;
+        string ticketCode = string.Empty;
 
-        var location = await _db.ParkingLocations.FirstAsync(l => l.Id == request.ParkingLocationId, ct);
+        await _db.ExecuteInTransactionAsync(async txct =>
+        {
+            // Serialize entry reservations at this location. The partial unique
+            // index still protects the duplicate-plate invariant.
+            await _db.LockLocationAsync(request.ParkingLocationId, txct);
 
-        var session = ParkingSession.RecordEntry(
-            tenantId: location.TenantId,
-            parkingLocationId: location.Id,
-            createdByGuardId: _user.UserId ?? Guid.Empty,
-            plateRaw: request.PlateNumber,
-            plateNormalized: normalized,
-            vehicleType: vehicleType,
-            vehicleColor: request.VehicleColor,
-            entryTime: _clock.UtcNow,
-            entryPhotoUrl: request.EntryPhotoUrl);
+            var duplicate = await _db.ParkingSessions.AnyAsync(s =>
+                s.ParkingLocationId == request.ParkingLocationId &&
+                s.PlateNumberNormalized == normalized &&
+                (s.Status == ParkingSessionStatus.ActiveUnpaid ||
+                 s.Status == ParkingSessionStatus.PaymentPending ||
+                 s.Status == ParkingSessionStatus.PaidExitWindow ||
+                 s.Status == ParkingSessionStatus.OverstayDue), txct);
+            if (duplicate)
+                throw new ConflictException("An active session already exists for this plate at this location.");
 
-        // Pin the rate plan version in effect at entry so later edits to the plan
-        // never change this session's pricing terms.
-        var versionId = await _ratePlanResolver.ResolveActiveVersionIdAsync(location.Id, session.EntryTime, ct);
-        if (versionId is { } v)
+            location = await _db.ParkingLocations.FirstAsync(l => l.Id == request.ParkingLocationId, txct);
+
+            if (location.ActiveRatePlanId is null)
+                throw new ConflictException("rate_plan_required: assign an active rate plan before accepting vehicle entries.");
+
+            var activeCount = await _db.ParkingSessions.CountAsync(s =>
+                s.ParkingLocationId == location.Id &&
+                (s.Status == ParkingSessionStatus.ActiveUnpaid ||
+                 s.Status == ParkingSessionStatus.PaymentPending ||
+                 s.Status == ParkingSessionStatus.PaidExitWindow ||
+                 s.Status == ParkingSessionStatus.OverstayDue), txct);
+            if (activeCount >= location.SlotCapacity)
+                throw new ConflictException($"location_at_capacity: {location.Name} is full ({location.SlotCapacity} slots).");
+
+            session = ParkingSession.RecordEntry(
+                tenantId: location.TenantId,
+                parkingLocationId: location.Id,
+                createdByGuardId: _user.UserId ?? Guid.Empty,
+                plateRaw: request.PlateNumber,
+                plateNormalized: normalized,
+                vehicleType: vehicleType,
+                vehicleColor: request.VehicleColor,
+                entryTime: _clock.UtcNow,
+                entryPhotoUrl: request.EntryPhotoUrl);
+
+            // Pin the rate plan version in effect at entry so later edits to the plan
+            // never change this session's pricing terms.
+            var versionId = await _ratePlanResolver.ResolveActiveVersionIdAsync(location.Id, session.EntryTime, txct);
+            if (versionId is not { } v)
+                throw new ConflictException("rate_plan_required: the location must have an active rate plan version before accepting entries.");
             session.SetRatePlanVersion(v);
 
-        var publicToken = _tokens.GeneratePublicToken();
-        var ticketCode = _tokens.GenerateTicketCode();
-        session.AssignTokens(
-            publicTokenHash: _tokens.Hash(publicToken),
-            publicTokenProtected: _tokens.Protect(publicToken),
-            ticketCodeHash: _tokens.Hash(ticketCode),
-            ticketCodeProtected: _tokens.Protect(ticketCode));
+            publicToken = _tokens.GeneratePublicToken();
+            ticketCode = _tokens.GenerateTicketCode();
+            session.AssignTokens(
+                publicTokenHash: _tokens.Hash(publicToken),
+                publicTokenProtected: _tokens.Protect(publicToken),
+                ticketCodeHash: _tokens.Hash(ticketCode),
+                ticketCodeProtected: _tokens.Protect(ticketCode));
 
-        await _db.ParkingSessions.AddAsync(session, ct);
+            await _db.ParkingSessions.AddAsync(session, txct);
 
-        try
-        {
-            await _db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
-        {
-            // Lost the race against the partial unique index.
-            throw new ConflictException("An active session already exists for this plate at this location.");
-        }
+            try
+            {
+                await _db.SaveChangesAsync(txct);
+            }
+            catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+            {
+                throw new ConflictException("An active session already exists for this plate at this location.");
+            }
+        }, ct);
 
         _logger.LogInformation("Entry recorded: session {SessionId} at location {LocationId}", session.Id, location.Id);
 

@@ -12,4 +12,6 @@ public interface ISessionPricingService
 {
     Task<FeeCalculationResult?> CalculateAsync(
         ParkingSession session, DateTimeOffset at, DiscountInput? discount, CancellationToken ct);
+
+    Task<int> GetPaidExitGraceMinutesAsync(ParkingSession session, CancellationToken ct);
 }

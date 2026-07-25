@@ -39,7 +39,7 @@ public sealed class GuardLocationService : IGuardLocationService
 
         var locations = await query.OrderBy(l => l.Name).ToListAsync(ct);
         return locations
-            .Select(l => new GuardLocationResponse(l.Id, l.Name, l.Slug, l.Timezone, l.AllowCashPayment))
+            .Select(l => new GuardLocationResponse(l.Id, l.Name, l.Slug, l.Timezone, l.AllowCashPayment, l.SlotCapacity))
             .ToArray();
     }
 }

@@ -42,7 +42,7 @@ public sealed class GuardCashPaymentServiceTests
     private ParkingSession Seed(bool allowCash = true, decimal totalPaid = 0m)
     {
         var location = new ParkingLocation(_tenantId, "Lot", "lot", "Asia/Manila", null);
-        location.UpdateDetails(null, "Asia/Manila", 15, allowCash);
+        location.UpdateDetails(null, "Asia/Manila", allowCash);
         _db.ParkingLocations.Add(location);
         var s = ParkingSession.RecordEntry(_tenantId, location.Id, Guid.NewGuid(), "ABC1234", "ABC1234", VehicleType.Car, null, _clock.UtcNow.AddHours(-4), null);
         s.AssignTokens("h", "p", "th", "tp");

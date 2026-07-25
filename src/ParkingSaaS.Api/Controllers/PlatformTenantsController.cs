@@ -34,4 +34,11 @@ public sealed class PlatformTenantsController : ApiControllerBase
     [HttpPatch("{id:guid}/status")]
     public async Task<IActionResult> ChangeStatus(Guid id, [FromBody] UpdateTenantStatusRequest request, CancellationToken ct)
         => Ok(ApiResponse<TenantResponse>.Ok(await _tenants.ChangeStatusAsync(id, request, ct)));
+
+    [HttpPost("{id:guid}/location-addons")]
+    public async Task<IActionResult> CreateAddOnLocation(Guid id, [FromBody] CreateTenantAddOnLocationRequest request, CancellationToken ct)
+    {
+        var created = await _tenants.CreateAddOnLocationAsync(id, request, ct);
+        return CreatedAtAction(nameof(Get), new { id = created.Id }, ApiResponse<TenantResponse>.Ok(created));
+    }
 }

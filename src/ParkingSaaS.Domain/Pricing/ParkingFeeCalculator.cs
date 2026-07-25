@@ -50,18 +50,6 @@ public sealed class ParkingFeeCalculator : IParkingFeeCalculator
             breakdown.Add(new PricingLineItem("weekend_multiplier", $"Weekend rate ×{wm}", delta));
         }
 
-        // Daily maximum caps the time charge per 24h day spanned.
-        if (rules.DailyMax is { } dailyMax)
-        {
-            var daysSpanned = Math.Max(1, (int)Math.Ceiling(billedMinutes / (24d * 60d)));
-            var cap = Round(dailyMax * daysSpanned);
-            if (baseAmount > cap)
-            {
-                breakdown.Add(new PricingLineItem("daily_max", $"Daily maximum applied ({daysSpanned} day(s))", cap - baseAmount));
-                baseAmount = cap;
-            }
-        }
-
         // Overnight surcharge if the stay overlaps the overnight window.
         var additionalAmount = 0m;
         if (rules.Overnight is { } overnight && overnight.Fee > 0m &&

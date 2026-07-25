@@ -12,6 +12,8 @@ public sealed class PaymentQueryRequest
     public Guid? SessionId { get; init; }
     public DateTimeOffset? From { get; init; }
     public DateTimeOffset? To { get; init; }
+    public string? SortBy { get; init; }
+    public string? SortDirection { get; init; }
     public int Page { get; init; } = 1;
     public int PageSize { get; init; } = 25;
 
@@ -86,7 +88,9 @@ public sealed record PaymentSessionContext(
     string Status,
     decimal? FinalFee,
     decimal TotalPaid,
-    DateTimeOffset? PaidExitDeadline);
+    DateTimeOffset? PaidExitDeadline,
+    decimal? CurrentFee = null,
+    decimal? CurrentOutstanding = null);
 
 public sealed record PaymentQuoteContext(
     Guid Id,

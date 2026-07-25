@@ -25,7 +25,7 @@ The API listens on <http://localhost:5274>. Swagger UI is at
 on port 5000, and you get no Swagger, no seed data, and no user-secrets. Alternatively set
 `ASPNETCORE_ENVIRONMENT=Development` in your shell.
 
-On startup in Development the app applies EF migrations and seeds demo data. Because
+On startup in Development the app applies EF migrations and seeds only the platform account. Because
 `Database:ResetOnStartup` is `true` in `appsettings.Development.json`, **the database is
 dropped and rebuilt on every boot** — expected locally, and it can never fire outside
 Development (`Program.cs` gates it on the environment).
@@ -35,9 +35,6 @@ Development (`Program.cs` gates it on the environment).
 | Role | Email | Password |
 |---|---|---|
 | Platform administrator | `platform@parking.local` | `Platform!2026` |
-| Tenant administrator | `admin@demo.local` | `Admin!2026` |
-| Supervisor | `supervisor@demo.local` | `Super!2026` |
-| Guard | `guard@demo.local` | `Guard!2026` |
 
 ## Secrets
 
@@ -45,8 +42,9 @@ Development secrets live in .NET user-secrets, not in the repo. They are keyed t
 `UserSecretsId` in `src/ParkingSaaS.Api/ParkingSaaS.Api.csproj` and stored under
 `%APPDATA%\Microsoft\UserSecrets\` on Windows.
 
-Outbound email is enabled in Development and needs an SMTP password. Without it the API
-still starts, but every queued message fails to send and dead-letters after 5 attempts.
+Outbound email is enabled in Development. Set `Email:Provider` to `Gmail` to use the
+configured Gmail SMTP credentials, or to `MicrosoftGraph` to use the Entra app-only
+credentials. Only the selected provider is used.
 
 ```bash
 cd src/ParkingSaaS.Api
@@ -54,11 +52,16 @@ dotnet user-secrets set "Email:Password" "<gmail app password>"
 dotnet user-secrets list          # verify
 ```
 
+The development file keeps both provider configurations available. To switch transports,
+change `Email:Provider` and set `Email:FromAddress` to an address owned by that provider.
+Gmail uses `Host`, `Port`, `UseSsl`, `Username`, and `Password`; Microsoft Graph uses
+`TenantId`, `ClientId`, and `ClientSecret`.
+
 To skip email entirely instead, set `Email:Enabled` to `false` in
 `appsettings.Development.json`. Queued mail is then written to the log by
 `LoggingEmailSender` rather than sent.
 
-`Email:Enabled` is validated at startup: if it is `true` while `Email:Host` or
+`Email:Enabled` is validated at startup: if the selected provider is incomplete, or
 `Email:FromAddress` is empty, the app refuses to boot rather than silently dropping mail.
 
 ## Docker

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Application.Common.Options;
+using ParkingSaaS.Application.Pricing;
 using ParkingSaaS.Contracts.Common;
 using ParkingSaaS.Contracts.Guard;
 using ParkingSaaS.Domain.Sessions;
@@ -21,6 +22,7 @@ public sealed class GuardSessionService : IGuardSessionService
     private readonly IApplicationDbContext _db;
     private readonly ICurrentUser _user;
     private readonly IPlateNormalizer _plateNormalizer;
+    private readonly ISessionPricingService _pricing;
     private readonly IParkingTokenService _tokens;
     private readonly IQrCodeGenerator _qr;
     private readonly PublicUrlOptions _urls;
@@ -29,6 +31,7 @@ public sealed class GuardSessionService : IGuardSessionService
         IApplicationDbContext db,
         ICurrentUser user,
         IPlateNormalizer plateNormalizer,
+        ISessionPricingService pricing,
         IParkingTokenService tokens,
         IQrCodeGenerator qr,
         IOptions<PublicUrlOptions> urls)
@@ -36,6 +39,7 @@ public sealed class GuardSessionService : IGuardSessionService
         _db = db;
         _user = user;
         _plateNormalizer = plateNormalizer;
+        _pricing = pricing;
         _tokens = tokens;
         _qr = qr;
         _urls = urls.Value;
@@ -81,8 +85,12 @@ public sealed class GuardSessionService : IGuardSessionService
             .Where(l => items.Select(s => s.ParkingLocationId).Contains(l.Id))
             .ToDictionaryAsync(l => l.Id, l => l.Name, ct);
 
+        var summaries = new List<SessionSummaryResponse>(items.Count);
+        foreach (var session in items)
+            summaries.Add(await ToSummaryAsync(session, locationNames.GetValueOrDefault(session.ParkingLocationId) ?? "Unknown location", now, ct));
+
         return new PagedResult<SessionSummaryResponse>(
-            items.Select(s => ToSummary(s, locationNames.GetValueOrDefault(s.ParkingLocationId) ?? "Unknown location", now)).ToArray(),
+            summaries.ToArray(),
             page.NormalizedPage,
             page.NormalizedPageSize,
             total);
@@ -95,7 +103,7 @@ public sealed class GuardSessionService : IGuardSessionService
             .Where(l => l.Id == session.ParkingLocationId)
             .Select(l => l.Name)
             .FirstOrDefaultAsync(ct) ?? "Unknown location";
-        return ToSummary(session, locationName, DateTimeOffset.UtcNow);
+        return await ToSummaryAsync(session, locationName, DateTimeOffset.UtcNow, ct);
     }
 
     public async Task<SessionQrResponse> GetQrAsync(Guid id, CancellationToken ct)
@@ -148,16 +156,25 @@ public sealed class GuardSessionService : IGuardSessionService
         return ids.ToHashSet();
     }
 
-    private static SessionSummaryResponse ToSummary(ParkingSession s, string locationName, DateTimeOffset now) => new(
-        s.Id,
-        s.ParkingLocationId,
-        locationName,
-        s.PlateNumberRaw,
-        s.VehicleType.ToString(),
-        s.VehicleColor,
-        s.EntryTime,
-        s.EffectiveStatus(now).ToString(),
-        s.FinalFee,
-        s.TotalPaid,
-        s.PaidExitDeadline);
+    private async Task<SessionSummaryResponse> ToSummaryAsync(ParkingSession s, string locationName, DateTimeOffset now, CancellationToken ct)
+    {
+        var result = await _pricing.CalculateAsync(s, now, discount: null, ct);
+        var calculatedFee = result?.TotalAmount ?? 0m;
+        return new SessionSummaryResponse(
+            s.Id,
+            s.ParkingLocationId,
+            locationName,
+            s.PlateNumberRaw,
+            s.VehicleType.ToString(),
+            s.VehicleColor,
+            s.EntryTime,
+            s.EffectiveStatus(now).ToString(),
+            result is not null,
+            result?.Currency ?? "PHP",
+            s.EffectiveFee(calculatedFee),
+            s.Outstanding(calculatedFee),
+            s.FinalFee,
+            s.TotalPaid,
+            s.PaidExitDeadline);
+    }
 }

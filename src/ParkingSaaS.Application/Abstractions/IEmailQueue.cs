@@ -16,7 +16,9 @@ public sealed record PaymentReceiptEmailData(
 public sealed record OverstayNoticeEmailData(
     string PlateNumber,
     string LocationName,
-    DateTimeOffset PaidExitDeadline);
+    DateTimeOffset PaidExitDeadline,
+    string PaymentUrl,
+    string QrCodeDataUri);
 
 public sealed record OperationsSummaryEmailData(
     OperationsSummaryResponse Summary,

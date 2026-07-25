@@ -48,4 +48,22 @@ public sealed class SessionPricingService : ISessionPricingService
 
         return _calculator.Calculate(input);
     }
+
+    public async Task<int> GetPaidExitGraceMinutesAsync(ParkingSession session, CancellationToken ct)
+    {
+        if (session.RatePlanVersionId is not { } versionId)
+            return 0;
+
+        var rulesJson = await _db.RatePlanVersions
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(v => v.Id == versionId)
+            .Select(v => v.RulesJson)
+            .FirstOrDefaultAsync(ct);
+
+        if (string.IsNullOrWhiteSpace(rulesJson))
+            return 0;
+
+        return PricingRules.Parse(rulesJson).PaidExitGraceMinutes;
+    }
 }

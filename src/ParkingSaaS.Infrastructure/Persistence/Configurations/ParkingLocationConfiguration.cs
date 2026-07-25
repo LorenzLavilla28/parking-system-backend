@@ -16,6 +16,8 @@ public sealed class ParkingLocationConfiguration : IEntityTypeConfiguration<Park
         b.Property(l => l.Address).HasMaxLength(500);
         b.Property(l => l.Timezone).HasMaxLength(64).IsRequired();
         b.Property(l => l.Status).HasConversion<string>().HasMaxLength(32);
+        b.Property(l => l.SlotCapacity).IsRequired();
+        b.Property(l => l.MonthlyPrice).HasColumnType("numeric(12,2)");
         b.Property(l => l.PublicQrCodeUrl).HasMaxLength(500);
 
         // Slug is unique per platform so public location routing is unambiguous.

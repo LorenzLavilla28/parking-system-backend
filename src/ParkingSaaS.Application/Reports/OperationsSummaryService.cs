@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Application.Common.Options;
+using ParkingSaaS.Application.Pricing;
 using ParkingSaaS.Contracts.Reports;
 using ParkingSaaS.Domain.Payments;
 using ParkingSaaS.Domain.Sessions;
@@ -15,6 +16,7 @@ public sealed class OperationsSummaryService : IOperationsSummaryService
 {
     private readonly IApplicationDbContext _db;
     private readonly IDateTime _clock;
+    private readonly ISessionPricingService _pricing;
     private readonly ITenantContext _tenant;
     private readonly IEmailQueue _emailQueue;
     private readonly EmailOptions _emailOptions;
@@ -22,12 +24,14 @@ public sealed class OperationsSummaryService : IOperationsSummaryService
     public OperationsSummaryService(
         IApplicationDbContext db,
         IDateTime clock,
+        ISessionPricingService pricing,
         ITenantContext tenant,
         IEmailQueue emailQueue,
         IOptions<EmailOptions> emailOptions)
     {
         _db = db;
         _clock = clock;
+        _pricing = pricing;
         _tenant = tenant;
         _emailQueue = emailQueue;
         _emailOptions = emailOptions.Value;
@@ -118,13 +122,26 @@ public sealed class OperationsSummaryService : IOperationsSummaryService
                 || s.Status == ParkingSessionStatus.PaymentPending
                 || s.Status == ParkingSessionStatus.PaidExitWindow
                 || s.Status == ParkingSessionStatus.OverstayDue), ct);
-        var persistedOverstays = await _db.ParkingSessions.IgnoreQueryFilters()
-            .CountAsync(s => s.TenantId == tenantId && s.Status == ParkingSessionStatus.OverstayDue, ct);
-        var staleOverstays = await _db.ParkingSessions.IgnoreQueryFilters()
-            .CountAsync(s => s.TenantId == tenantId
-                             && s.Status == ParkingSessionStatus.PaidExitWindow
-                             && s.PaidExitDeadline != null
-                             && s.PaidExitDeadline <= end, ct);
+        var overstayCandidates = await _db.ParkingSessions.IgnoreQueryFilters()
+            .Where(s => s.TenantId == tenantId
+                        && (s.Status == ParkingSessionStatus.OverstayDue
+                            || (s.Status == ParkingSessionStatus.PaidExitWindow
+                                && s.PaidExitDeadline != null
+                                && s.PaidExitDeadline <= end)))
+            .ToListAsync(ct);
+        var currentOverstays = 0;
+        foreach (var session in overstayCandidates)
+        {
+            if (session.EffectiveStatus(end) != ParkingSessionStatus.OverstayDue)
+                continue;
+
+            var calculation = await _pricing.CalculateAsync(session, end, discount: null, ct);
+            // A payment can settle an overstay without the lifecycle status being
+            // refreshed before this report runs. Recalculate the live balance so
+            // fully paid sessions are not reported as requiring attention.
+            if (calculation is null || session.Outstanding(calculation.TotalAmount) > 0m)
+                currentOverstays++;
+        }
 
         var payments = await _db.Payments.IgnoreQueryFilters()
             .AsNoTracking()
@@ -143,8 +160,8 @@ public sealed class OperationsSummaryService : IOperationsSummaryService
                              && w.ProcessingStatus == WebhookProcessingStatus.Failed, ct);
 
         var attention = new List<OperationsAttentionItem>();
-        if (persistedOverstays + staleOverstays > 0)
-            attention.Add(new("danger", "Overstay sessions", $"{persistedOverstays + staleOverstays} session(s) passed the paid exit window."));
+        if (currentOverstays > 0)
+            attention.Add(new("danger", "Overstay sessions", $"{currentOverstays} session(s) passed the paid exit window."));
         if (pending.Length > 0)
             attention.Add(new("warning", "Pending payments", $"{pending.Length} payment(s) are awaiting provider confirmation."));
         if (failed.Length > 0)
@@ -164,7 +181,7 @@ public sealed class OperationsSummaryService : IOperationsSummaryService
             exits,
             active,
             paid.Sum(p => p.Amount),
-            persistedOverstays + staleOverstays,
+            currentOverstays,
             pending.Length,
             pending.Sum(p => p.Amount),
             failed.Length,

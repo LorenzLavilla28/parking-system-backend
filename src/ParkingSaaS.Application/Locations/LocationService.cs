@@ -5,6 +5,8 @@ using ParkingSaaS.Contracts.Common;
 using ParkingSaaS.Contracts.Locations;
 using ParkingSaaS.Domain.Locations;
 using ParkingSaaS.Domain.RatePlans;
+using ParkingSaaS.Domain.Sessions;
+using ParkingSaaS.Domain.Tenants;
 
 namespace ParkingSaaS.Application.Locations;
 
@@ -26,16 +28,34 @@ public sealed class LocationService : ILocationService
 
     public async Task<LocationResponse> CreateAsync(CreateLocationRequest request, CancellationToken ct)
     {
-        var slug = request.Slug.Trim().ToLowerInvariant();
-        var exists = await _db.ParkingLocations.AnyAsync(l => l.Slug == slug, ct);
-        if (exists)
-            throw new ConflictException($"A location with slug '{slug}' already exists.");
+        ParkingLocation location = null!;
+        await _db.ExecuteInTransactionAsync(async txct =>
+        {
+            // Serialize included-location provisioning so two tenant-admin requests
+            // cannot both consume the final location allowance.
+            await _db.LockTenantAsync(_tenant.TenantId, txct);
+            var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == _tenant.TenantId, txct)
+                ?? throw new NotFoundException("Tenant not found.");
+            var limits = SubscriptionPlanRules.For(tenant.SubscriptionPlan);
+            var activeLocationCount = await _db.ParkingLocations.CountAsync(l => l.Status == LocationStatus.Active, txct);
+            if (limits.MaximumLocations is null)
+                throw new ConflictException("custom_plan_requires_platform_approval");
+            if (activeLocationCount >= limits.MaximumLocations.Value)
+                throw new ConflictException($"location_limit_reached: {tenant.SubscriptionPlan} includes up to {limits.MaximumLocations.Value} active location(s).");
+            if (limits.MaximumSlotsPerLocation is { } maxSlots && request.SlotCapacity > maxSlots)
+                throw new ConflictException($"capacity_not_allowed: {tenant.SubscriptionPlan} allows up to {maxSlots} slots per location.");
 
-        var location = new ParkingLocation(_tenant.TenantId, request.Name, slug, request.Timezone, request.Address);
-        location.UpdateDetails(request.Address, request.Timezone, request.ExitGraceMinutes, request.AllowCashPayment);
+            var slug = request.Slug.Trim().ToLowerInvariant();
+            var exists = await _db.ParkingLocations.AnyAsync(l => l.Slug == slug, txct);
+            if (exists)
+                throw new ConflictException($"A location with slug '{slug}' already exists.");
 
-        await _db.ParkingLocations.AddAsync(location, ct);
-        await _db.SaveChangesAsync(ct);
+            location = new ParkingLocation(_tenant.TenantId, request.Name, slug, request.Timezone, request.Address, request.SlotCapacity);
+            location.UpdateDetails(request.Address, request.Timezone, request.AllowCashPayment, request.SlotCapacity);
+
+            await _db.ParkingLocations.AddAsync(location, txct);
+            await _db.SaveChangesAsync(txct);
+        }, ct);
         return location.ToResponse();
     }
 
@@ -45,7 +65,21 @@ public sealed class LocationService : ILocationService
             ?? throw new NotFoundException("Parking location not found.");
 
         location.Rename(request.Name);
-        location.UpdateDetails(request.Address, request.Timezone, request.ExitGraceMinutes, request.AllowCashPayment);
+        var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == _tenant.TenantId, ct)
+            ?? throw new NotFoundException("Tenant not found.");
+        var limits = SubscriptionPlanRules.For(tenant.SubscriptionPlan);
+        if (!location.IsAddOn && limits.MaximumSlotsPerLocation is { } maxSlots && request.SlotCapacity > maxSlots)
+            throw new ConflictException($"capacity_not_allowed: {tenant.SubscriptionPlan} allows up to {maxSlots} slots per location.");
+        var activeOccupancy = await _db.ParkingSessions.CountAsync(s =>
+            s.ParkingLocationId == location.Id &&
+            (s.Status == ParkingSessionStatus.ActiveUnpaid ||
+             s.Status == ParkingSessionStatus.PaymentPending ||
+             s.Status == ParkingSessionStatus.PaidExitWindow ||
+             s.Status == ParkingSessionStatus.OverstayDue), ct);
+        if (request.SlotCapacity < activeOccupancy)
+            throw new ConflictException($"capacity_below_occupancy: this location currently has {activeOccupancy} active vehicle(s).");
+
+        location.UpdateDetails(request.Address, request.Timezone, request.AllowCashPayment, request.SlotCapacity);
 
         if (request.ClearRatePlan)
         {
@@ -102,11 +136,53 @@ public sealed class LocationService : ILocationService
             total);
     }
 
+    public async Task<LocationQuotaResponse> GetQuotaAsync(CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == _tenant.TenantId, ct)
+            ?? throw new NotFoundException("Tenant not found.");
+        var limits = SubscriptionPlanRules.For(tenant.SubscriptionPlan);
+        var activeLocations = await _db.ParkingLocations
+            .CountAsync(l => l.Status == LocationStatus.Active, ct);
+        var canCreateLocation = limits.MaximumLocations is { } maximumLocations
+            && activeLocations < maximumLocations;
+
+        return new LocationQuotaResponse(
+            tenant.SubscriptionPlan.ToString(),
+            activeLocations,
+            limits.MaximumLocations,
+            limits.MaximumSlotsPerLocation,
+            canCreateLocation);
+    }
+
     public async Task ArchiveAsync(Guid id, CancellationToken ct)
     {
         var location = await _db.ParkingLocations.FirstOrDefaultAsync(l => l.Id == id, ct)
             ?? throw new NotFoundException("Parking location not found.");
         location.ChangeStatus(LocationStatus.Archived);
         await _db.SaveChangesAsync(ct);
+    }
+
+    public async Task RestoreAsync(Guid id, CancellationToken ct)
+    {
+        await _db.ExecuteInTransactionAsync(async txct =>
+        {
+            await _db.LockTenantAsync(_tenant.TenantId, txct);
+            var location = await _db.ParkingLocations.FirstOrDefaultAsync(l => l.Id == id, txct)
+                ?? throw new NotFoundException("Parking location not found.");
+            if (location.Status == LocationStatus.Active)
+                return;
+
+            var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == _tenant.TenantId, txct)
+                ?? throw new NotFoundException("Tenant not found.");
+            var limits = SubscriptionPlanRules.For(tenant.SubscriptionPlan);
+            var activeLocationCount = await _db.ParkingLocations.CountAsync(l => l.Status == LocationStatus.Active, txct);
+            if (limits.MaximumLocations is null)
+                throw new ConflictException("custom_plan_requires_platform_approval");
+            if (activeLocationCount >= limits.MaximumLocations.Value)
+                throw new ConflictException($"location_limit_reached: {tenant.SubscriptionPlan} includes up to {limits.MaximumLocations.Value} active location(s).");
+
+            location.ChangeStatus(LocationStatus.Active);
+            await _db.SaveChangesAsync(txct);
+        }, ct);
     }
 }

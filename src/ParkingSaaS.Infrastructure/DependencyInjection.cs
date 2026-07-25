@@ -32,8 +32,18 @@ public static class DependencyInjection
         services.AddOptions<PayMongoOptions>().Bind(configuration.GetSection(PayMongoOptions.SectionName));
         services.AddOptions<EmailOptions>()
             .Bind(configuration.GetSection(EmailOptions.SectionName))
-            .Validate(o => !o.Enabled || !string.IsNullOrWhiteSpace(o.Host),
-                "Email:Enabled is true but Email:Host is not set.")
+            .Validate(o => !o.Enabled ||
+                string.Equals(o.Provider, "Gmail", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(o.Provider, "Smtp", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(o.Provider, "MicrosoftGraph", StringComparison.OrdinalIgnoreCase),
+                "Email:Provider must be Gmail, Smtp, or MicrosoftGraph.")
+            .Validate(o => !o.Enabled ||
+                (string.Equals(o.Provider, "MicrosoftGraph", StringComparison.OrdinalIgnoreCase)
+                    ? !string.IsNullOrWhiteSpace(o.TenantId)
+                        && !string.IsNullOrWhiteSpace(o.ClientId)
+                        && !string.IsNullOrWhiteSpace(o.ClientSecret)
+                    : !string.IsNullOrWhiteSpace(o.Host)),
+                "Email is enabled but its transport settings are incomplete.")
             .Validate(o => !o.Enabled || !string.IsNullOrWhiteSpace(o.FromAddress),
                 "Email:Enabled is true but Email:FromAddress is not set.")
             .ValidateOnStart();
@@ -89,7 +99,10 @@ public static class DependencyInjection
         // queued mail is visible without a mail server (dev/CI). A misconfigured Enabled=true
         // fails at startup via the EmailOptions validation above rather than silently no-opping.
         var email = configuration.GetSection(EmailOptions.SectionName).Get<EmailOptions>() ?? new EmailOptions();
-        if (email.Enabled)
+        services.AddHttpClient();
+        if (email.Enabled && string.Equals(email.Provider, "MicrosoftGraph", StringComparison.OrdinalIgnoreCase))
+            services.AddSingleton<IEmailSender, GraphEmailSender>();
+        else if (email.Enabled)
             services.AddSingleton<IEmailSender, SmtpEmailSender>();
         else
             services.AddSingleton<IEmailSender, LoggingEmailSender>();

@@ -9,8 +9,10 @@ public enum TenantStatus
 
 public enum SubscriptionPlan
 {
+    /// <summary>Legacy value retained for existing records; unavailable for new onboarding.</summary>
     Free = 1,
     Starter = 2,
     Growth = 3,
-    Enterprise = 4
+    Enterprise = 4,
+    Custom = 5
 }

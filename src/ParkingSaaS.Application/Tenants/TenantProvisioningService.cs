@@ -12,7 +12,8 @@ namespace ParkingSaaS.Application.Tenants;
 /// <summary>
 /// Creates and lifecycle-manages tenants. Runs only under the platform-admin
 /// policy, so it bypasses the tenant query filter and provisions the tenant's
-/// first administrator atomically with the tenant record.
+/// first administrator atomically with the tenant record. Operational
+/// locations are created later by the tenant administrator.
 /// </summary>
 public sealed class TenantProvisioningService : ITenantProvisioningService
 {
@@ -35,20 +36,14 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
         if (await _db.Tenants.AnyAsync(t => t.Slug == slug, ct))
             throw new ConflictException($"A tenant with slug '{slug}' already exists.");
 
-        ParkingLocation? firstLocation = null;
-        if (request.FirstLocation is not null)
-        {
-            var locationSlug = request.FirstLocation.Slug.Trim().ToLowerInvariant();
-            if (await _db.ParkingLocations.AnyAsync(l => l.Slug == locationSlug, ct))
-                throw new ConflictException($"A location with slug '{locationSlug}' already exists.");
-        }
-
         var adminEmail = request.AdminEmail.Trim().ToLowerInvariant();
         if (await _db.Users.IgnoreQueryFilters().AnyAsync(u => u.Email == adminEmail, ct))
             throw new ConflictException("A user with the administrator email already exists.");
 
         if (!Enum.TryParse<SubscriptionPlan>(request.SubscriptionPlan, ignoreCase: true, out var plan))
             throw new ConflictException($"Unknown subscription plan '{request.SubscriptionPlan}'.");
+        if (plan == SubscriptionPlan.Free)
+            throw new ConflictException("The Free plan is no longer available for new onboarding.");
 
         var tenant = new Tenant(request.Name, slug, plan, request.DefaultCurrency, request.DefaultTimezone);
         await _db.Tenants.AddAsync(tenant, ct);
@@ -63,24 +58,6 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
         admin.AddRole(RoleType.TenantAdministrator);
         await _db.Users.AddAsync(admin, ct);
 
-        if (request.FirstLocation is not null)
-        {
-            var locationRequest = request.FirstLocation;
-            var locationSlug = locationRequest.Slug.Trim().ToLowerInvariant();
-            firstLocation = new ParkingLocation(
-                tenant.Id,
-                locationRequest.Name,
-                locationSlug,
-                locationRequest.Timezone,
-                locationRequest.Address);
-            firstLocation.UpdateDetails(
-                locationRequest.Address,
-                locationRequest.Timezone,
-                locationRequest.ExitGraceMinutes,
-                locationRequest.AllowCashPayment);
-            await _db.ParkingLocations.AddAsync(firstLocation, ct);
-        }
-
         // Queue the onboarding email in the same transaction as the tenant/admin creation,
         // so it's never sent for a tenant that failed to persist (and never lost).
         _emailQueue.QueueTenantOnboarding(
@@ -88,7 +65,29 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
             tenant.Name, tenant.Slug, request.AdminPassword, _clock.UtcNow);
 
         await _db.SaveChangesAsync(ct);
-        return ToResponse(tenant, firstLocation);
+        return ToResponse(tenant);
+    }
+
+    public async Task<TenantResponse> CreateAddOnLocationAsync(Guid tenantId, CreateTenantAddOnLocationRequest request, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId, ct)
+            ?? throw new NotFoundException("Tenant not found.");
+
+        var slug = request.Slug.Trim().ToLowerInvariant();
+        if (await _db.ParkingLocations.IgnoreQueryFilters().AnyAsync(l => l.Slug == slug, ct))
+            throw new ConflictException($"A location with slug '{slug}' already exists.");
+
+        var monthlyPrice = SubscriptionPlanRules.AddOnPriceFor(request.SlotCapacity) ?? request.MonthlyPrice;
+        if (monthlyPrice is null or <= 0m)
+            throw new ConflictException("A location above 90 slots requires a custom monthly price and approval.");
+
+        var location = new ParkingLocation(
+            tenant.Id, request.Name, slug, request.Timezone, request.Address,
+            request.SlotCapacity, isAddOn: true, monthlyPrice: monthlyPrice);
+        location.UpdateDetails(request.Address, request.Timezone, request.AllowCashPayment, request.SlotCapacity);
+        await _db.ParkingLocations.AddAsync(location, ct);
+        await _db.SaveChangesAsync(ct);
+        return ToResponse(tenant);
     }
 
     public async Task<TenantResponse> ChangeStatusAsync(Guid id, UpdateTenantStatusRequest request, CancellationToken ct)
@@ -141,7 +140,7 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
             total);
     }
 
-    private static TenantResponse ToResponse(Tenant t, ParkingLocation? firstLocation = null) => new(
+    private static TenantResponse ToResponse(Tenant t) => new(
         t.Id,
         t.Name,
         t.Slug,
@@ -149,10 +148,9 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
         t.SubscriptionPlan.ToString(),
         t.DefaultCurrency,
         t.DefaultTimezone,
+        SubscriptionPlanRules.For(t.SubscriptionPlan).MaximumLocations,
+        SubscriptionPlanRules.For(t.SubscriptionPlan).MaximumSlotsPerLocation,
+        SubscriptionPlanRules.For(t.SubscriptionPlan).MonthlyPrice,
         t.CreatedAt,
-        t.UpdatedAt,
-        firstLocation is null ? null : new TenantOnboardingLocationResponse(
-            firstLocation.Id,
-            firstLocation.Name,
-            firstLocation.Slug));
+        t.UpdatedAt);
 }

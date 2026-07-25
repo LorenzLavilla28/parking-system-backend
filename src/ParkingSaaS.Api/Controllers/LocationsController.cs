@@ -24,6 +24,10 @@ public sealed class LocationsController : ApiControllerBase
     public async Task<IActionResult> List([FromQuery] PageQuery query, CancellationToken ct)
         => Ok(ApiResponse<PagedResult<LocationResponse>>.Ok(await _locations.ListAsync(query, ct)));
 
+    [HttpGet("quota")]
+    public async Task<IActionResult> Quota(CancellationToken ct)
+        => Ok(ApiResponse<LocationQuotaResponse>.Ok(await _locations.GetQuotaAsync(ct)));
+
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> Get(Guid id, CancellationToken ct)
         => Ok(ApiResponse<LocationResponse>.Ok(await _locations.GetAsync(id, ct)));
@@ -43,6 +47,13 @@ public sealed class LocationsController : ApiControllerBase
     public async Task<IActionResult> Archive(Guid id, CancellationToken ct)
     {
         await _locations.ArchiveAsync(id, ct);
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/restore")]
+    public async Task<IActionResult> Restore(Guid id, CancellationToken ct)
+    {
+        await _locations.RestoreAsync(id, ct);
         return NoContent();
     }
 }

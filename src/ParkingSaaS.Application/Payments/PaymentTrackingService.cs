@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Common.Exceptions;
+using ParkingSaaS.Application.Pricing;
 using ParkingSaaS.Contracts.Common;
 using ParkingSaaS.Contracts.Payments;
 using ParkingSaaS.Domain.Payments;
@@ -12,15 +13,21 @@ namespace ParkingSaaS.Application.Payments;
 public sealed class PaymentTrackingService : IPaymentTrackingService
 {
     private readonly IApplicationDbContext _db;
+    private readonly ISessionPricingService _pricing;
+    private readonly IDateTime _clock;
 
-    public PaymentTrackingService(IApplicationDbContext db) => _db = db;
+    public PaymentTrackingService(IApplicationDbContext db, ISessionPricingService pricing, IDateTime clock)
+    {
+        _db = db;
+        _pricing = pricing;
+        _clock = clock;
+    }
 
     public async Task<PagedResult<PaymentSummaryResponse>> SearchAsync(PaymentQueryRequest request, CancellationToken ct)
     {
         var query = BuildQuery(request);
         var total = await query.LongCountAsync(ct);
-        var payments = await query
-            .OrderByDescending(x => x.CreatedAt)
+        var payments = await ApplyOrdering(query, request)
             .Skip((request.NormalizedPage - 1) * request.NormalizedPageSize)
             .Take(request.NormalizedPageSize)
             .ToListAsync(ct);
@@ -68,11 +75,17 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
                 e.PaymentId, e.ReceivedAt, e.ProcessedAt, e.ProcessingStatus.ToString(), e.FailureReason))
             .ToListAsync(ct);
 
+        var now = _clock.UtcNow;
+        var currentCalculation = session.ExitTime is null
+            ? await _pricing.CalculateAsync(session, now, discount: null, ct)
+            : null;
+        decimal? currentFee = currentCalculation?.TotalAmount;
+        decimal? currentOutstanding = currentCalculation is null ? null : session.Outstanding(currentCalculation.TotalAmount);
         var timeline = BuildTimeline(payment, session, audit, webhooks);
         var sessionContext = new PaymentSessionContext(
             session.Id, session.PlateNumberRaw, session.VehicleType.ToString(), locationName,
             session.EntryTime, session.ExitTime, EffectiveSessionStatus(session.Status, session.PaidExitDeadline).ToString(), session.FinalFee,
-            session.TotalPaid, session.PaidExitDeadline);
+            session.TotalPaid, session.PaidExitDeadline, currentFee, currentOutstanding);
         var quoteContext = quote is null
             ? null
             : new PaymentQuoteContext(
@@ -84,8 +97,7 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
 
     public async Task<byte[]> ExportCsvAsync(PaymentQueryRequest request, CancellationToken ct)
     {
-        var payments = await BuildQuery(request)
-            .OrderByDescending(x => x.CreatedAt)
+        var payments = await ApplyOrdering(BuildQuery(request), request)
             .Take(10_000)
             .ToListAsync(ct);
         var rows = await LoadProjectionsAsync(payments, ct);
@@ -148,6 +160,16 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
         // non-translatable DTO in SQL.
         return query.Where(p => _db.ParkingSessions.Any(s => s.Id == p.ParkingSessionId
             && _db.ParkingLocations.Any(l => l.Id == s.ParkingLocationId)));
+    }
+
+    private static IOrderedQueryable<Payment> ApplyOrdering(IQueryable<Payment> query, PaymentQueryRequest request)
+    {
+        var descending = !string.Equals(request.SortDirection, "asc", StringComparison.OrdinalIgnoreCase);
+        return request.SortBy?.Trim().ToLowerInvariant() switch
+        {
+            "amount" => descending ? query.OrderByDescending(x => x.Amount).ThenByDescending(x => x.CreatedAt) : query.OrderBy(x => x.Amount).ThenByDescending(x => x.CreatedAt),
+            _ => descending ? query.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id) : query.OrderBy(x => x.CreatedAt).ThenBy(x => x.Id),
+        };
     }
 
     private async Task<IReadOnlyList<PaymentProjection>> LoadProjectionsAsync(

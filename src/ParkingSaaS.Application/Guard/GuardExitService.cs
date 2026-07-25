@@ -14,8 +14,9 @@ namespace ParkingSaaS.Application.Guard;
 /// <summary>
 /// Exit validation. The backend is the source of truth: the status banner and the
 /// approval both recompute the fee and outstanding balance server-side, never
-/// trusting the guard's screen. Exit is allowed only when nothing is outstanding,
-/// or a supervisor supplies an override reason (e.g. payment-provider downtime).
+/// trusting the guard's screen. Exit is allowed only when nothing is outstanding.
+/// A supervisor override may release a regular unpaid session during an approved
+/// operational exception, but it never bypasses an overdue balance.
 /// </summary>
 public sealed class GuardExitService : IGuardExitService
 {
@@ -46,7 +47,7 @@ public sealed class GuardExitService : IGuardExitService
         await GuardLocationAccess.EnsureCanOperateAsync(_db, _user, session.ParkingLocationId, ct);
 
         var now = _clock.UtcNow;
-        var (result, calculated) = await CalculateAsync(session, ct);
+        var (result, calculated) = await CalculateAsync(session, now, ct);
         var outstanding = session.Outstanding(calculated);
         var effectiveFee = session.EffectiveFee(calculated);
 
@@ -69,9 +70,16 @@ public sealed class GuardExitService : IGuardExitService
         if (!session.Status.IsActive())
             throw new ConflictException("This session is already closed.");
 
-        var (_, calculated) = await CalculateAsync(session, ct);
+        var (_, calculated) = await CalculateAsync(session, now, ct);
         var outstanding = session.Outstanding(calculated);
         var finalFee = session.EffectiveFee(calculated);
+        var effectiveStatus = session.EffectiveStatus(now);
+
+        // Once the paid exit window has expired, the session requires a new
+        // payment before it can be released. This remains true even when the
+        // current calculated fee happens to equal the amount already paid.
+        if (effectiveStatus == ParkingSessionStatus.OverstayDue)
+            throw new ConflictException("This session is overdue. The outstanding balance must be paid before exit.");
 
         var hasOverride = !string.IsNullOrWhiteSpace(request.OverrideReason);
         if (outstanding > 0m)
@@ -109,14 +117,16 @@ public sealed class GuardExitService : IGuardExitService
     {
         if (status is ParkingSessionStatus.Exited or ParkingSessionStatus.Void or ParkingSessionStatus.Cancelled)
             return ("Closed", false);
+        if (status == ParkingSessionStatus.OverstayDue)
+            return ("AdditionalPaymentRequired", false);
         if (outstanding <= 0m)
             return (totalPaid > 0m ? "Paid" : "Free", true);
         return (totalPaid > 0m ? "AdditionalPaymentRequired" : "NotPaid", false);
     }
 
-    private async Task<(Domain.Pricing.FeeCalculationResult? Result, decimal Calculated)> CalculateAsync(ParkingSession session, CancellationToken ct)
+    private async Task<(Domain.Pricing.FeeCalculationResult? Result, decimal Calculated)> CalculateAsync(ParkingSession session, DateTimeOffset now, CancellationToken ct)
     {
-        var result = await _pricing.CalculateAsync(session, _clock.UtcNow, discount: null, ct);
+        var result = await _pricing.CalculateAsync(session, now, discount: null, ct);
         return (result, result?.TotalAmount ?? 0m);
     }
 

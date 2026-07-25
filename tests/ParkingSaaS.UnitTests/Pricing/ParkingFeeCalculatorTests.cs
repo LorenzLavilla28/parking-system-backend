@@ -18,7 +18,7 @@ public sealed class ParkingFeeCalculatorTests
     {
         Currency = "PHP",
         EntryGraceMinutes = 15,
-        DailyMax = 250m,
+        PaidExitGraceMinutes = 15,
         Default = new RateBlock
         {
             Type = RateType.FirstBlock,
@@ -44,12 +44,18 @@ public sealed class ParkingFeeCalculatorTests
     public void First_block_then_succeeding_per_hour_or_fraction(int minutes, decimal expected)
         => Run(CanonicalRules(), minutes).TotalAmount.Should().Be(expected);
 
+    [Fact]
+    public void No_daily_maximum_is_applied()
+        => Run(CanonicalRules(), 14 * 60).TotalAmount.Should().Be(270m);
+
+#if false // Retained only as historical documentation; daily maximum is no longer supported.
     // ---- Daily maximum -----------------------------------------------------
     [Theory]
     [InlineData(13 * 60, 250)] // 50 + 10*20 = 250 (at cap)
     [InlineData(14 * 60, 250)] // 50 + 11*20 = 270 → capped
-    public void Daily_maximum_caps_the_charge(int minutes, decimal expected)
+    public void Charges_continue_without_a_daily_maximum(int minutes, decimal expected)
         => Run(CanonicalRules(), minutes).TotalAmount.Should().Be(expected);
+#endif
 
     // ---- Flat --------------------------------------------------------------
     [Fact]

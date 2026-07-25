@@ -15,8 +15,10 @@ public sealed record RatePlanResponse(
     string Description,
     string Status,
     int? CurrentVersionNumber,
+    int? PaidExitGraceMinutes,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    string? CurrentRulesJson = null);
 
 public sealed record RatePlanVersionResponse(
     Guid Id,

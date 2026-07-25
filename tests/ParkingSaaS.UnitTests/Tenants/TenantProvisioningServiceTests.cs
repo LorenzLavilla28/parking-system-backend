@@ -25,7 +25,7 @@ public sealed class TenantProvisioningServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_provisions_tenant_admin_and_first_location()
+    public async Task CreateAsync_provisions_tenant_and_admin_without_a_location()
     {
         var request = new CreateTenantRequest(
             Name: "Acme Parking",
@@ -36,35 +36,21 @@ public sealed class TenantProvisioningServiceTests
             AdminFirstName: "Ada",
             AdminLastName: "Admin",
             AdminEmail: "Ada@Acme.test",
-            AdminPassword: "StrongPass!2026",
-            FirstLocation: new CreateTenantLocationRequest(
-                Name: "Main Branch",
-                Slug: "main-branch",
-                Address: "Level 2",
-                Timezone: "Asia/Manila",
-                ExitGraceMinutes: 15,
-                AllowCashPayment: true));
+            AdminPassword: "StrongPass!2026");
 
         var response = await _service.CreateAsync(request, CancellationToken.None);
 
         response.Name.Should().Be("Acme Parking");
-        response.FirstLocation.Should().NotBeNull();
-        response.FirstLocation!.Name.Should().Be("Main Branch");
-        response.FirstLocation.Slug.Should().Be("main-branch");
-
         var tenant = await _db.Tenants.IgnoreQueryFilters().SingleAsync();
         var admin = await _db.Users.IgnoreQueryFilters().SingleAsync();
-        var location = await _db.ParkingLocations.IgnoreQueryFilters().SingleAsync();
+        var locationCount = await _db.ParkingLocations.IgnoreQueryFilters().CountAsync();
 
         admin.TenantId.Should().Be(tenant.Id);
         admin.Email.Should().Be("ada@acme.test");
         admin.HasRole(RoleType.TenantAdministrator).Should().BeTrue();
         admin.MustChangePassword.Should().BeTrue();
 
-        location.TenantId.Should().Be(tenant.Id);
-        location.Name.Should().Be("Main Branch");
-        location.ExitGraceMinutes.Should().Be(15);
-        location.AllowCashPayment.Should().BeTrue();
+        locationCount.Should().Be(0);
 
         // An onboarding email is queued to the new administrator in the same transaction.
         var email = await _db.Emails.SingleAsync();

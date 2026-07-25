@@ -46,11 +46,19 @@ public sealed class EmailOptions
     /// <summary>Master switch for real delivery. False → messages are queued and logged, not sent.</summary>
     public bool Enabled { get; set; }
 
+    /// <summary>Email transport: Gmail (SMTP) or MicrosoftGraph.</summary>
+    public string Provider { get; set; } = "Smtp";
+
     public string Host { get; set; } = string.Empty;
     public int Port { get; set; } = 587;
     public bool UseSsl { get; set; } = true;
     public string Username { get; set; } = string.Empty;
     public string Password { get; set; } = string.Empty;
+
+    /// <summary>Microsoft Entra app-only credentials used by the Microsoft Graph transport.</summary>
+    public string TenantId { get; set; } = string.Empty;
+    public string ClientId { get; set; } = string.Empty;
+    public string ClientSecret { get; set; } = string.Empty;
 
     public string FromAddress { get; set; } = "no-reply@parking.example.com";
     public string FromName { get; set; } = "ParkingSaaS";

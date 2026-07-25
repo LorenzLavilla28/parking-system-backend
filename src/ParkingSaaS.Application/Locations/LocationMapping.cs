@@ -13,9 +13,11 @@ internal static class LocationMapping
         l.Address,
         l.Timezone,
         l.Status.ToString(),
-        l.ExitGraceMinutes,
         l.AllowCashPayment,
+        l.SlotCapacity,
         l.ActiveRatePlanId,
+        l.IsAddOn,
+        l.MonthlyPrice,
         l.PublicQrCodeUrl,
         l.CreatedAt,
         l.UpdatedAt);

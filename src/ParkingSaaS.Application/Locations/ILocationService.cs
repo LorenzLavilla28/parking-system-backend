@@ -9,5 +9,7 @@ public interface ILocationService
     Task<LocationResponse> UpdateAsync(Guid id, UpdateLocationRequest request, CancellationToken ct);
     Task<LocationResponse> GetAsync(Guid id, CancellationToken ct);
     Task<PagedResult<LocationResponse>> ListAsync(PageQuery query, CancellationToken ct);
+    Task<LocationQuotaResponse> GetQuotaAsync(CancellationToken ct);
     Task ArchiveAsync(Guid id, CancellationToken ct);
+    Task RestoreAsync(Guid id, CancellationToken ct);
 }

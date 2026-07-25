@@ -14,7 +14,7 @@ public sealed class PricingRulesTests
           "currency": "PHP",
           "entryGraceMinutes": 15,
           "default": { "type": "FirstBlock", "firstHours": 3, "firstAmount": 50, "incrementAmount": 20, "incrementUnit": "Hour" },
-          "dailyMax": 250
+          "paidExitGraceMinutes": 20
         }
         """;
 
@@ -23,7 +23,7 @@ public sealed class PricingRulesTests
         rules.EntryGraceMinutes.Should().Be(15);
         rules.Default.Type.Should().Be(RateType.FirstBlock);
         rules.Default.IncrementUnit.Should().Be(IncrementUnit.Hour);
-        rules.DailyMax.Should().Be(250m);
+        rules.PaidExitGraceMinutes.Should().Be(20);
     }
 
     [Fact]

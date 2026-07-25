@@ -24,6 +24,9 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
     private readonly IDateTime _clock;
     private readonly ISessionRealtimeNotifier _realtime;
     private readonly IEmailQueue? _emailQueue;
+    private readonly IParkingTokenService _tokens;
+    private readonly IQrCodeGenerator _qr;
+    private readonly PublicUrlOptions _urls;
     private readonly PayMongoOptions _options;
     private readonly ILogger<PaymentReconciliationService> _logger;
 
@@ -35,7 +38,10 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
         ISessionRealtimeNotifier realtime,
         IOptions<PayMongoOptions> options,
         ILogger<PaymentReconciliationService> logger,
-        IEmailQueue? emailQueue = null)
+        IEmailQueue? emailQueue,
+        IParkingTokenService tokens,
+        IQrCodeGenerator qr,
+        IOptions<PublicUrlOptions> urls)
     {
         _db = db;
         _gateway = gateway;
@@ -45,6 +51,9 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
         _options = options.Value;
         _logger = logger;
         _emailQueue = emailQueue;
+        _tokens = tokens;
+        _qr = qr;
+        _urls = urls.Value;
     }
 
     public async Task<ReconciliationSummary> ReconcileAsync(CancellationToken ct)
@@ -209,13 +218,33 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
                     .Select(l => l.Name)
                     .FirstOrDefaultAsync(ct);
                 if (!string.IsNullOrWhiteSpace(recipient))
+                {
+                    var paymentUrl = BuildPaymentUrl(session);
                     _emailQueue.QueueOverstayNotice(
                         session.TenantId, recipient!,
-                        new OverstayNoticeEmailData(session.PlateNumberRaw, locationName ?? "Parking", deadline), now);
+                        new OverstayNoticeEmailData(
+                            session.PlateNumberRaw, locationName ?? "Parking", deadline,
+                            paymentUrl,
+                            string.IsNullOrWhiteSpace(paymentUrl) ? string.Empty : _qr.GeneratePngDataUri(paymentUrl)), now);
+                }
             }
             session.MarkOverstay();
         }
 
         return overdue;
     }
+
+    private string BuildPaymentUrl(ParkingSession session)
+    {
+        try
+        {
+            return _urls.SessionPath(_tokens.Unprotect(session.PublicTokenProtected));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not rebuild payment URL for overdue session {SessionId}.", session.Id);
+            return string.Empty;
+        }
+    }
+
 }

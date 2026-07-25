@@ -81,13 +81,26 @@ public static class EmailTemplates
     {
         var deadline = d.PaidExitDeadline.ToString("dd MMM yyyy, HH:mm 'UTC'", CultureInfo.InvariantCulture);
         var subject = $"Parking exit window passed ({d.PlateNumber})";
+        var qr = string.IsNullOrWhiteSpace(d.QrCodeDataUri)
+            ? string.Empty
+            : $"<img src=\"{E(d.QrCodeDataUri)}\" alt=\"Payment QR code\" width=\"180\" height=\"180\" style=\"display:block;width:180px;height:180px;margin:0 auto;border:1px solid #e2e8f0;border-radius:8px\"/>";
+        var paymentAction = string.IsNullOrWhiteSpace(d.PaymentUrl)
+            ? "<p>Please proceed to the exit desk to settle the outstanding balance.</p>"
+            : $"<p style=\"margin:24px 0\"><a href=\"{E(d.PaymentUrl)}\" style=\"background:#0f172a;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block\">Review and pay outstanding balance</a></p>";
         var html = Wrap("Exit window passed", $$"""
             <p>Your paid exit window for <strong>{{E(d.PlateNumber)}}</strong> at {{E(d.LocationName)}} has passed.</p>
-            <p>The current parking fee will be recalculated when you exit. Please proceed to the exit desk or open your parking payment page to settle any additional amount.</p>
+            <p>Your parking balance has been recalculated. Please settle the outstanding amount before presenting the vehicle for exit.</p>
             <p style="color:#b45309;font-size:13px">Original exit deadline: {{E(deadline)}}</p>
+            <div style="margin:20px 0;padding:16px;text-align:center;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px">
+              <p style="margin:0 0 12px;font-weight:700">Scan to review and pay</p>
+              {{qr}}
+              <p style="margin:12px 0 0;font-size:12px;color:#64748b">If the QR code does not display, use the button below.</p>
+            </div>
+            {{paymentAction}}
             """);
         var text = $"Your paid exit window for {d.PlateNumber} at {d.LocationName} has passed. " +
-                   $"The current parking fee will be recalculated when you exit. Original deadline: {deadline}.";
+                   $"Please settle the outstanding balance before exit. Original deadline: {deadline}." +
+                   (string.IsNullOrWhiteSpace(d.PaymentUrl) ? string.Empty : $"\n\nReview and pay: {d.PaymentUrl}");
         return EmailMessage.Create(EmailKind.OverstayNotice, toEmail, null, subject, html, text, now, tenantId, maxAttempts);
     }
 

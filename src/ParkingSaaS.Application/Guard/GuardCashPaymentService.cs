@@ -77,7 +77,8 @@ public sealed class GuardCashPaymentService : IGuardCashPaymentService
             session.TenantId, session.Id, feeQuoteId: null, currency, amountDue,
             _tokens.Hash(reference), _tokens.Protect(reference), now, receiptNumber, _user.UserId ?? Guid.Empty);
 
-        session.RegisterPayment(amountDue, now.AddMinutes(location.ExitGraceMinutes));
+        var graceMinutes = await _pricing.GetPaidExitGraceMinutesAsync(session, ct);
+        session.RegisterPayment(amountDue, now.AddMinutes(graceMinutes));
 
         await _db.Payments.AddAsync(payment, ct);
         await _audit.AddAsync(
