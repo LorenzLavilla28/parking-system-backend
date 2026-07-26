@@ -19,16 +19,7 @@ public sealed class SubscriptionPlanRulesTests
         result.MonthlyPrice.Should().Be(monthlyPrice);
     }
 
-    [Theory]
-    [InlineData(20, 3000)]
-    [InlineData(21, 6000)]
-    [InlineData(50, 6000)]
-    [InlineData(51, 10000)]
-    [InlineData(90, 10000)]
-    public void Prices_addons_by_capacity_band(int slots, decimal monthlyPrice)
-        => SubscriptionPlanRules.AddOnPriceFor(slots).Should().Be(monthlyPrice);
-
     [Fact]
-    public void Capacity_above_90_requires_custom_pricing()
-        => SubscriptionPlanRules.AddOnPriceFor(91).Should().BeNull();
+    public void Additional_capacity_extends_the_plan_limit_per_location()
+        => SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(SubscriptionPlan.Growth, 20).Should().Be(70);
 }

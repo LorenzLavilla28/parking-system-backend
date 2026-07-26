@@ -59,4 +59,22 @@ public sealed class TenantProvisioningServiceTests
         email.Status.Should().Be(EmailStatus.Pending);
         email.TextBody.Should().Contain("Temporary password: StrongPass!2026");
     }
+
+    [Fact]
+    public async Task Can_change_plan_and_capacity_addon_independently()
+    {
+        var response = await _service.CreateAsync(new CreateTenantRequest(
+            "Acme Parking", "acme-parking", "Growth", "PHP", "Asia/Manila",
+            "Ada", "Admin", "ada@acme.test", "StrongPass!2026"), CancellationToken.None);
+
+        var withCapacity = await _service.UpdateCapacityAddonAsync(
+            response.Id, new UpdateTenantCapacityAddonRequest(20, "Approved capacity exception"), CancellationToken.None);
+        withCapacity.AdditionalSlotCapacity.Should().Be(20);
+        withCapacity.EffectiveMaximumSlotsPerLocation.Should().Be(70);
+
+        var changedPlan = await _service.ChangePlanAsync(
+            response.Id, new UpdateTenantPlanRequest("Enterprise", "Approved plan change"), CancellationToken.None);
+        changedPlan.SubscriptionPlan.Should().Be("Enterprise");
+        changedPlan.AdditionalSlotCapacity.Should().Be(20);
+    }
 }

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using ParkingSaaS.Application.Audit;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Contracts.Common;
@@ -21,13 +22,20 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
     private readonly IPasswordHasher _passwordHasher;
     private readonly IEmailQueue _emailQueue;
     private readonly IDateTime _clock;
+    private readonly IAuditLogger? _audit;
 
-    public TenantProvisioningService(IApplicationDbContext db, IPasswordHasher passwordHasher, IEmailQueue emailQueue, IDateTime clock)
+    public TenantProvisioningService(
+        IApplicationDbContext db,
+        IPasswordHasher passwordHasher,
+        IEmailQueue emailQueue,
+        IDateTime clock,
+        IAuditLogger? audit = null)
     {
         _db = db;
         _passwordHasher = passwordHasher;
         _emailQueue = emailQueue;
         _clock = clock;
+        _audit = audit;
     }
 
     public async Task<TenantResponse> CreateAsync(CreateTenantRequest request, CancellationToken ct)
@@ -65,29 +73,7 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
             tenant.Name, tenant.Slug, request.AdminPassword, _clock.UtcNow);
 
         await _db.SaveChangesAsync(ct);
-        return ToResponse(tenant);
-    }
-
-    public async Task<TenantResponse> CreateAddOnLocationAsync(Guid tenantId, CreateTenantAddOnLocationRequest request, CancellationToken ct)
-    {
-        var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId, ct)
-            ?? throw new NotFoundException("Tenant not found.");
-
-        var slug = request.Slug.Trim().ToLowerInvariant();
-        if (await _db.ParkingLocations.IgnoreQueryFilters().AnyAsync(l => l.Slug == slug, ct))
-            throw new ConflictException($"A location with slug '{slug}' already exists.");
-
-        var monthlyPrice = SubscriptionPlanRules.AddOnPriceFor(request.SlotCapacity) ?? request.MonthlyPrice;
-        if (monthlyPrice is null or <= 0m)
-            throw new ConflictException("A location above 90 slots requires a custom monthly price and approval.");
-
-        var location = new ParkingLocation(
-            tenant.Id, request.Name, slug, request.Timezone, request.Address,
-            request.SlotCapacity, isAddOn: true, monthlyPrice: monthlyPrice);
-        location.UpdateDetails(request.Address, request.Timezone, request.AllowCashPayment, request.SlotCapacity);
-        await _db.ParkingLocations.AddAsync(location, ct);
-        await _db.SaveChangesAsync(ct);
-        return ToResponse(tenant);
+        return ToResponse(tenant, 0);
     }
 
     public async Task<TenantResponse> ChangeStatusAsync(Guid id, UpdateTenantStatusRequest request, CancellationToken ct)
@@ -97,17 +83,134 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
 
         if (!Enum.TryParse<TenantStatus>(request.Status, ignoreCase: true, out var status))
             throw new ConflictException($"Unknown tenant status '{request.Status}'.");
+        if (status == TenantStatus.Suspended && string.IsNullOrWhiteSpace(request.Reason))
+            throw new ConflictException("A reason is required before suspending a tenant.");
+
+        var activeLocationCount = await ActiveLocationCountAsync(id, ct);
+        var previousStatus = tenant.Status.ToString();
+        if (tenant.Status == status)
+            return ToResponse(tenant, activeLocationCount);
 
         tenant.ChangeStatus(status);
+        await AddAuditAsync(
+            id,
+            "tenant.status_changed",
+            new { status = previousStatus },
+            new
+            {
+                status = status.ToString(),
+                effectiveDate = "Immediately",
+                billingImpact = "No billing change",
+            },
+            request.Reason,
+            ct);
         await _db.SaveChangesAsync(ct);
-        return ToResponse(tenant);
+        return ToResponse(tenant, activeLocationCount);
+    }
+
+    public async Task<TenantResponse> ChangePlanAsync(Guid id, UpdateTenantPlanRequest request, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == id, ct)
+            ?? throw new NotFoundException("Tenant not found.");
+
+        if (!Enum.TryParse<SubscriptionPlan>(request.SubscriptionPlan, ignoreCase: true, out var plan) || plan == SubscriptionPlan.Free)
+            throw new ConflictException($"Unknown or unavailable subscription plan '{request.SubscriptionPlan}'.");
+        if (string.IsNullOrWhiteSpace(request.Reason))
+            throw new ConflictException("A reason is required before changing a tenant's plan.");
+        if (!string.Equals(request.EffectiveDate, "Immediately", StringComparison.OrdinalIgnoreCase))
+            throw new ConflictException("Next billing cycle plan changes are not supported yet. Select Immediately.");
+
+        var limits = SubscriptionPlanRules.For(plan);
+        var activeLocations = await _db.ParkingLocations
+            .Where(l => l.TenantId == id && l.Status == LocationStatus.Active)
+            .ToListAsync(ct);
+
+        if (limits.MaximumLocations is { } maximumLocations && activeLocations.Count > maximumLocations)
+            throw new ConflictException($"plan_downgrade_blocked: {plan} allows up to {maximumLocations} active location(s), but this tenant has {activeLocations.Count}.");
+
+        if (limits.MaximumSlotsPerLocation is { } maximumSlots)
+        {
+            var effectiveMaximum = maximumSlots + tenant.AdditionalSlotCapacity;
+            var oversized = activeLocations.FirstOrDefault(l => l.SlotCapacity > effectiveMaximum);
+            if (oversized is not null)
+                throw new ConflictException($"plan_downgrade_blocked: {oversized.Name} uses {oversized.SlotCapacity} slots, above the new effective limit of {effectiveMaximum}.");
+        }
+
+        var previousPlan = tenant.SubscriptionPlan;
+        if (previousPlan == plan)
+            return ToResponse(tenant, activeLocations.Count);
+
+        tenant.ChangePlan(plan);
+        await AddAuditAsync(
+            id,
+            "tenant.plan_changed",
+            new
+            {
+                subscriptionPlan = previousPlan.ToString(),
+                monthlyPrice = SubscriptionPlanRules.For(previousPlan).MonthlyPrice,
+            },
+            new
+            {
+                subscriptionPlan = plan.ToString(),
+                monthlyPrice = limits.MonthlyPrice,
+                effectiveDate = "Immediately",
+                proratedCharge = (decimal?)null,
+                existingAddons = "No change",
+                billingImpact = "Proration is handled by the billing system.",
+            },
+            request.Reason,
+            ct);
+        await _db.SaveChangesAsync(ct);
+        return ToResponse(tenant, activeLocations.Count);
+    }
+
+    public async Task<TenantResponse> UpdateCapacityAddonAsync(Guid id, UpdateTenantCapacityAddonRequest request, CancellationToken ct)
+    {
+        var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == id, ct)
+            ?? throw new NotFoundException("Tenant not found.");
+        if (request.AdditionalSlotCapacity < 0)
+            throw new ConflictException("Additional capacity cannot be negative.");
+        if (string.IsNullOrWhiteSpace(request.Reason))
+            throw new ConflictException("A reason is required before changing capacity.");
+
+        var baseMaximum = SubscriptionPlanRules.For(tenant.SubscriptionPlan).MaximumSlotsPerLocation;
+        if (baseMaximum is { } maximumSlots)
+        {
+            var largestActiveLocation = await _db.ParkingLocations
+                .Where(l => l.TenantId == id && l.Status == LocationStatus.Active)
+                .Select(l => (int?)l.SlotCapacity)
+                .MaxAsync(ct) ?? 0;
+            var requiredAdditionalCapacity = Math.Max(0, largestActiveLocation - maximumSlots);
+            if (request.AdditionalSlotCapacity < requiredAdditionalCapacity)
+                throw new ConflictException($"capacity_addon_reduction_blocked: at least {requiredAdditionalCapacity} additional slot(s) are needed by the current locations.");
+        }
+
+        var previousCapacity = tenant.AdditionalSlotCapacity;
+        if (previousCapacity == request.AdditionalSlotCapacity)
+            return ToResponse(tenant, await ActiveLocationCountAsync(id, ct));
+
+        tenant.SetAdditionalSlotCapacity(request.AdditionalSlotCapacity);
+        await AddAuditAsync(
+            id,
+            "tenant.capacity_addon_changed",
+            new { additionalSlotCapacity = previousCapacity },
+            new
+            {
+                additionalSlotCapacity = request.AdditionalSlotCapacity,
+                effectiveDate = "Immediately",
+                billingImpact = "Capacity add-on billing is not calculated in this workspace.",
+            },
+            request.Reason,
+            ct);
+        await _db.SaveChangesAsync(ct);
+        return ToResponse(tenant, await ActiveLocationCountAsync(id, ct));
     }
 
     public async Task<TenantResponse> GetAsync(Guid id, CancellationToken ct)
     {
         var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == id, ct)
             ?? throw new NotFoundException("Tenant not found.");
-        return ToResponse(tenant);
+        return ToResponse(tenant, await ActiveLocationCountAsync(id, ct));
     }
 
     public async Task<PagedResult<TenantResponse>> ListAsync(PageQuery query, CancellationToken ct)
@@ -133,14 +236,79 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
             .Take(query.NormalizedPageSize)
             .ToListAsync(ct);
 
+        var tenantIds = items.Select(t => t.Id).ToArray();
+        var locationCounts = await _db.ParkingLocations
+            .Where(l => tenantIds.Contains(l.TenantId) && l.Status == LocationStatus.Active)
+            .GroupBy(l => l.TenantId)
+            .Select(g => new { TenantId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.TenantId, x => x.Count, ct);
+
         return new PagedResult<TenantResponse>(
-            items.Select(t => ToResponse(t)).ToArray(),
+            items.Select(t => ToResponse(t, locationCounts.GetValueOrDefault(t.Id))).ToArray(),
             query.NormalizedPage,
             query.NormalizedPageSize,
             total);
     }
 
-    private static TenantResponse ToResponse(Tenant t) => new(
+    public async Task<IReadOnlyList<TenantAuditLogResponse>> GetAuditHistoryAsync(Guid id, CancellationToken ct)
+    {
+        if (!await _db.Tenants.AsNoTracking().AnyAsync(t => t.Id == id, ct))
+            throw new NotFoundException("Tenant not found.");
+
+        var logs = await _db.AuditLogs.AsNoTracking()
+            .Where(a => a.TenantId == id && a.EntityType == "Tenant")
+            .OrderByDescending(a => a.CreatedAt)
+            .Take(50)
+            .ToListAsync(ct);
+        var userIds = logs.Where(a => a.UserId.HasValue).Select(a => a.UserId!.Value).Distinct().ToArray();
+        var users = await _db.Users.IgnoreQueryFilters()
+            .Where(u => userIds.Contains(u.Id))
+            .ToDictionaryAsync(u => u.Id, u => new { Name = (u.FirstName + " " + u.LastName).Trim(), u.Email }, ct);
+
+        return logs.Select(a =>
+        {
+            var administrator = a.UserId.HasValue && users.TryGetValue(a.UserId.Value, out var user)
+                ? user.Name.Length > 0 ? user.Name : user.Email
+                : "System";
+            return new TenantAuditLogResponse(
+                a.Id,
+                a.Action,
+                administrator,
+                a.Reason,
+                a.OldValuesJson,
+                a.NewValuesJson,
+                a.CreatedAt);
+        }).ToArray();
+    }
+
+    private async Task<int> ActiveLocationCountAsync(Guid tenantId, CancellationToken ct)
+        => await _db.ParkingLocations.CountAsync(l => l.TenantId == tenantId && l.Status == LocationStatus.Active, ct);
+
+    private async Task AddAuditAsync(
+        Guid tenantId,
+        string action,
+        object oldValues,
+        object newValues,
+        string? reason,
+        CancellationToken ct)
+    {
+        if (_audit is null)
+            return;
+
+        await _audit.AddAsync(
+            tenantId,
+            null,
+            action,
+            "Tenant",
+            tenantId.ToString(),
+            oldValues,
+            newValues,
+            reason,
+            new AuditContext(null, null),
+            ct);
+    }
+
+    private static TenantResponse ToResponse(Tenant t, int activeLocationCount) => new(
         t.Id,
         t.Name,
         t.Slug,
@@ -151,6 +319,9 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
         SubscriptionPlanRules.For(t.SubscriptionPlan).MaximumLocations,
         SubscriptionPlanRules.For(t.SubscriptionPlan).MaximumSlotsPerLocation,
         SubscriptionPlanRules.For(t.SubscriptionPlan).MonthlyPrice,
+        t.AdditionalSlotCapacity,
+        SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(t.SubscriptionPlan, t.AdditionalSlotCapacity),
+        activeLocationCount,
         t.CreatedAt,
         t.UpdatedAt);
 }

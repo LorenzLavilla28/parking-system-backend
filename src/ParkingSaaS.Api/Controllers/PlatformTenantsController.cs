@@ -24,6 +24,10 @@ public sealed class PlatformTenantsController : ApiControllerBase
     public async Task<IActionResult> Get(Guid id, CancellationToken ct)
         => Ok(ApiResponse<TenantResponse>.Ok(await _tenants.GetAsync(id, ct)));
 
+    [HttpGet("{id:guid}/audit-history")]
+    public async Task<IActionResult> AuditHistory(Guid id, CancellationToken ct)
+        => Ok(ApiResponse<IReadOnlyList<TenantAuditLogResponse>>.Ok(await _tenants.GetAuditHistoryAsync(id, ct)));
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateTenantRequest request, CancellationToken ct)
     {
@@ -35,10 +39,11 @@ public sealed class PlatformTenantsController : ApiControllerBase
     public async Task<IActionResult> ChangeStatus(Guid id, [FromBody] UpdateTenantStatusRequest request, CancellationToken ct)
         => Ok(ApiResponse<TenantResponse>.Ok(await _tenants.ChangeStatusAsync(id, request, ct)));
 
-    [HttpPost("{id:guid}/location-addons")]
-    public async Task<IActionResult> CreateAddOnLocation(Guid id, [FromBody] CreateTenantAddOnLocationRequest request, CancellationToken ct)
-    {
-        var created = await _tenants.CreateAddOnLocationAsync(id, request, ct);
-        return CreatedAtAction(nameof(Get), new { id = created.Id }, ApiResponse<TenantResponse>.Ok(created));
-    }
+    [HttpPatch("{id:guid}/plan")]
+    public async Task<IActionResult> ChangePlan(Guid id, [FromBody] UpdateTenantPlanRequest request, CancellationToken ct)
+        => Ok(ApiResponse<TenantResponse>.Ok(await _tenants.ChangePlanAsync(id, request, ct)));
+
+    [HttpPatch("{id:guid}/capacity-addon")]
+    public async Task<IActionResult> UpdateCapacityAddon(Guid id, [FromBody] UpdateTenantCapacityAddonRequest request, CancellationToken ct)
+        => Ok(ApiResponse<TenantResponse>.Ok(await _tenants.UpdateCapacityAddonAsync(id, request, ct)));
 }

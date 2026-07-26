@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Application.Locations;
 using ParkingSaaS.Contracts.Locations;
@@ -44,6 +45,19 @@ public sealed class LocationEntitlementTests
         var act = () => _service.CreateAsync(Request("large", 51), CancellationToken.None);
 
         await act.Should().ThrowAsync<ConflictException>().WithMessage("*capacity_not_allowed*");
+    }
+
+    [Fact]
+    public async Task Growth_addon_capacity_allows_more_slots_without_adding_a_location()
+    {
+        var tenant = await _db.Tenants.IgnoreQueryFilters().SingleAsync();
+        tenant.SetAdditionalSlotCapacity(20);
+        await _db.SaveChangesAsync();
+
+        var location = await _service.CreateAsync(Request("large", 70), CancellationToken.None);
+
+        location.IsAddOn.Should().BeFalse();
+        location.SlotCapacity.Should().Be(70);
     }
 
     [Fact]

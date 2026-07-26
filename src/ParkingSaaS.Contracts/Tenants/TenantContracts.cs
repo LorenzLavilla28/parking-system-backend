@@ -11,16 +11,11 @@ public sealed record CreateTenantRequest(
     string AdminEmail,
     string AdminPassword);
 
-public sealed record CreateTenantAddOnLocationRequest(
-    string Name,
-    string Slug,
-    string? Address,
-    string Timezone,
-    int SlotCapacity,
-    bool AllowCashPayment = true,
-    decimal? MonthlyPrice = null);
+public sealed record UpdateTenantStatusRequest(string Status, string? Reason = null);
 
-public sealed record UpdateTenantStatusRequest(string Status);
+public sealed record UpdateTenantPlanRequest(string SubscriptionPlan, string? Reason = null, string EffectiveDate = "Immediately");
+
+public sealed record UpdateTenantCapacityAddonRequest(int AdditionalSlotCapacity, string? Reason = null);
 
 public sealed record TenantResponse(
     Guid Id,
@@ -33,5 +28,17 @@ public sealed record TenantResponse(
     int? MaximumLocations,
     int? MaximumSlotsPerLocation,
     decimal? MonthlyPrice,
+    int AdditionalSlotCapacity,
+    int? EffectiveMaximumSlotsPerLocation,
+    int ActiveLocationCount,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
+
+public sealed record TenantAuditLogResponse(
+    Guid Id,
+    string Action,
+    string Administrator,
+    string? Reason,
+    string? OldValuesJson,
+    string? NewValuesJson,
+    DateTimeOffset CreatedAt);

@@ -21,22 +21,12 @@ public static class SubscriptionPlanRules
 
     public static bool IsPaidPlan(SubscriptionPlan plan) => plan is not SubscriptionPlan.Free;
 
-    /// <summary>Returns the standard monthly add-on price for a location capacity.</summary>
-    public static decimal? AddOnPriceFor(int slotCapacity) => slotCapacity switch
+    public static int? EffectiveMaximumSlotsPerLocation(SubscriptionPlan plan, int additionalSlotCapacity)
     {
-        >= 1 and <= 20 => 3000m,
-        >= 21 and <= 50 => 6000m,
-        >= 51 and <= 90 => 10000m,
-        _ => null
-    };
+        var baseLimit = For(plan).MaximumSlotsPerLocation;
+        return baseLimit is null ? null : baseLimit.Value + Math.Max(0, additionalSlotCapacity);
+    }
 
-    public static string CapacityBandFor(int slotCapacity) => slotCapacity switch
-    {
-        >= 1 and <= 20 => "Starter",
-        >= 21 and <= 50 => "Growth",
-        >= 51 and <= 90 => "Enterprise",
-        _ => "Custom"
-    };
 }
 
 public sealed record SubscriptionPlanLimits(

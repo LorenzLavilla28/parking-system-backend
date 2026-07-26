@@ -17,6 +17,9 @@ public class Tenant : AuditableEntity
     public TenantStatus Status { get; private set; } = TenantStatus.Active;
     public SubscriptionPlan SubscriptionPlan { get; private set; } = SubscriptionPlan.Free;
 
+    /// <summary>Additional slots granted per location outside the base plan allowance.</summary>
+    public int AdditionalSlotCapacity { get; private set; }
+
     /// <summary>ISO 4217 code, e.g. "PHP". Used as the default for new locations.</summary>
     public string DefaultCurrency { get; private set; } = "PHP";
 
@@ -52,6 +55,13 @@ public class Tenant : AuditableEntity
     public void ChangeStatus(TenantStatus status) => Status = status;
 
     public void ChangePlan(SubscriptionPlan plan) => SubscriptionPlan = plan;
+
+    public void SetAdditionalSlotCapacity(int capacity)
+    {
+        if (capacity is < 0 or > 100000)
+            throw new DomainException("tenant.additional_capacity_invalid", "Additional capacity must be between 0 and 100,000 slots.");
+        AdditionalSlotCapacity = capacity;
+    }
 
     public bool IsActive => Status == TenantStatus.Active;
 }

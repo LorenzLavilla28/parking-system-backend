@@ -658,11 +658,14 @@ namespace ParkingSaaS.Infrastructure.Persistence.Migrations
                     b.ToTable("parking_sessions", (string)null);
                 });
 
-            modelBuilder.Entity("ParkingSaaS.Domain.Tenants.Tenant", b =>
+                modelBuilder.Entity("ParkingSaaS.Domain.Tenants.Tenant", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
+
+                    b.Property<int>("AdditionalSlotCapacity")
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
