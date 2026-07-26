@@ -21,6 +21,17 @@ public sealed class PayMongoOptions
     public string BaseUrl { get; set; } = "https://api.paymongo.com/v1";
     public string SecretKey { get; set; } = string.Empty;
     public string WebhookSecret { get; set; } = string.Empty;
+    /// <summary>
+    /// Retained for configuration compatibility. Global PayMongo credentials
+    /// are no longer supported; payment credentials must belong to the tenant.
+    /// </summary>
+    [Obsolete("Global PayMongo fallback is no longer supported.")]
+    public bool AllowGlobalFallback { get; set; }
+    public bool ValidateCredentialsWithProvider { get; set; } = true;
+    public string ActiveEnvironment { get; set; } = "test";
+    public string WebhookBaseUrl { get; set; } = string.Empty;
+    public string SecretNamePrefix { get; set; } = "parking-saas/tenants";
+    public int CredentialCacheMinutes { get; set; } = 10;
 
     /// <summary>
     /// Payment methods offered on the hosted checkout, in display order. Must be values
@@ -32,6 +43,14 @@ public sealed class PayMongoOptions
     /// <summary>Reconciliation sweep interval and the age after which a pending payment is reconciled.</summary>
     public int ReconcileIntervalSeconds { get; set; } = 120;
     public int ReconcilePendingOlderThanMinutes { get; set; } = 3;
+}
+
+public sealed class AwsSecretsOptions
+{
+    public const string SectionName = "AwsSecrets";
+
+    public bool Enabled { get; set; } = true;
+    public string Region { get; set; } = "ap-southeast-1";
 }
 
 /// <summary>

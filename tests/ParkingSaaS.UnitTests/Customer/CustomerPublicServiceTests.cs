@@ -112,13 +112,14 @@ public sealed class CustomerPublicServiceTests
     }
 
     [Fact]
-    public async Task Public_session_view_is_masked_and_minimal()
+    public async Task Public_session_view_shows_plate_and_remains_minimal()
     {
         var token = AddActiveSession("ABC1234");
 
         var view = await _service.GetSessionByTokenAsync(token, CancellationToken.None);
 
-        view.MaskedPlate.Should().Be("AB•••34");
+        view.PlateNumber.Should().Be("ABC1234");
+        view.VehicleType.Should().Be(nameof(VehicleType.Car));
         view.LocationName.Should().Be("Demo Lot");
         view.PaymentStatus.Should().Be("Unpaid");
     }

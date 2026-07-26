@@ -14,4 +14,12 @@ public interface ISessionPricingService
         ParkingSession session, DateTimeOffset at, DiscountInput? discount, CancellationToken ct);
 
     Task<int> GetPaidExitGraceMinutesAsync(ParkingSession session, CancellationToken ct);
+
+    /// <summary>
+    /// Returns the exit deadline for a successful payment. When the payment
+    /// covers the first rate block, the deadline is anchored to the end of that
+    /// block plus the configured grace period; top-up payments use payment time.
+    /// </summary>
+    Task<DateTimeOffset> GetPaidExitDeadlineAsync(
+        ParkingSession session, DateTimeOffset paidAt, CancellationToken ct);
 }

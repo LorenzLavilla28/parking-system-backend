@@ -1,16 +1,223 @@
-# Running the backend
+# Running ParkingSaaS locally
 
-How to get the ParkingSaaS API up on a development machine. All commands are run from
-`parking-system-backend/` unless stated otherwise.
+This guide covers the complete local application on Windows and macOS. The supported
+path uses Docker Compose for PostgreSQL and the API, and runs the Vite frontend on the
+host. All Docker Compose commands are run from `parking-system-backend/` unless stated
+otherwise.
 
-## Prerequisites
+Local URLs:
+
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:5173 |
+| API | http://localhost:5274 |
+| Swagger | http://localhost:5274/swagger |
+| Health | http://localhost:5274/api/health |
+| PostgreSQL | localhost:5432 |
+
+## Recommended Docker Compose workflow
+
+### Prerequisites for Windows
+
+Install [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/),
+[Git for Windows](https://git-scm.com/download/win), and
+[Node.js 20 or newer](https://nodejs.org/). Start Docker Desktop before running the
+commands below. Enable the WSL 2 backend if Docker Desktop asks.
+
+### Prerequisites for macOS
+
+Install [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/),
+[Git](https://git-scm.com/download/mac) or Xcode Command Line Tools, and
+[Node.js 20 or newer](https://nodejs.org/). Start Docker Desktop before running the
+commands below. Intel and Apple Silicon Macs are supported.
+
+Verify Docker Compose and Node:
+
+```bash
+docker --version
+docker compose version
+node --version
+npm --version
+```
+
+Use `docker compose` with a space; the older standalone `docker-compose` command is
+not required.
+
+### Create the backend environment file
+
+From the repository root, enter the backend directory:
+
+```bash
+cd parking-system-backend
+```
+
+Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+macOS Terminal:
+
+```bash
+cp .env.example .env
+```
+
+The default `.env` values start PostgreSQL as `parkingsaas` with user `parking` and
+password `parking`, expose the API on port `5274`, allow the frontend at port `5173`,
+keep database reset disabled, and keep email disabled. The file is local-only and must
+not be committed.
+
+### Start PostgreSQL and the API
+
+Run from `parking-system-backend/`:
+
+```bash
+docker compose -f deploy/docker-compose.yml config
+docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml ps
+```
+
+The API waits for the PostgreSQL health check and applies EF Core migrations on
+startup. Follow logs when needed:
+
+```bash
+docker compose -f deploy/docker-compose.yml logs -f api
+```
+
+Open <http://localhost:5274/api/health> to verify the API. In Development, the
+platform administrator is seeded with:
+
+| Role | Email | Password |
+|---|---|---|
+| Platform administrator | `platform@parking.local` | `Platform!2026` |
+
+### Start the frontend
+
+Open a second terminal.
+
+Windows PowerShell:
+
+```powershell
+cd parking-system-frontend
+npm ci
+npm run dev
+```
+
+macOS Terminal:
+
+```bash
+cd parking-system-frontend
+npm ci
+npm run dev
+```
+
+Open <http://localhost:5173>. The checked-in `frontend/.env.development` points to
+`http://localhost:5274`. If you change `API_PORT` in the backend `.env`, update
+`parking-system-frontend/.env.development` and restart Vite:
+
+```text
+VITE_API_BASE_URL=http://localhost:<api-port>
+```
+
+### Stop and restart
+
+Stop the stack while keeping database data:
+
+```bash
+docker compose -f deploy/docker-compose.yml down
+```
+
+Start it again later:
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+Rebuild after backend or Dockerfile changes:
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d --build api
+```
+
+Do not add `-v` unless you intentionally want to delete the local database volume.
+
+## PayMongo and AWS Secrets Manager
+
+PayMongo credentials are tenant-owned. There is no local or global PayMongo key
+fallback. If a tenant has not connected its own PayMongo account, the public payment
+page is cash-only and guards can record cash when cash is enabled for the location.
+
+To connect a tenant’s PayMongo test account from the local app, the API container needs
+AWS credentials. Add them only to the untracked `parking-system-backend/.env` file:
+
+```dotenv
+AWS_REGION=ap-southeast-1
+AWS_ACCESS_KEY_ID=your-access-key-id
+AWS_SECRET_ACCESS_KEY=your-secret-access-key
+AWS_SESSION_TOKEN=
+AWS_SECRETS_ENABLED=true
+```
+
+Use temporary credentials where possible. Never put AWS credentials in frontend
+environment files, source code, Docker images, or Git. The IAM identity needs:
+
+- `secretsmanager:CreateSecret`
+- `secretsmanager:PutSecretValue`
+- `secretsmanager:GetSecretValue`
+
+The API container receives these values through Docker Compose. Confirm the region
+without printing secret values:
+
+```bash
+docker compose -f deploy/docker-compose.yml exec api printenv AWS_REGION
+```
+
+Then sign in as the tenant administrator, open Payment settings, enter that tenant’s
+PayMongo test credentials, and connect the account. The local active environment is
+`test`, and redirect URLs use `PUBLIC_BASE_URL` (default `http://localhost:5173`).
+
+PayMongo webhooks cannot normally reach localhost from the public internet. The payment
+flow also polls PayMongo status, but a full webhook test requires a public HTTPS URL or
+a tunnel. Do not use live credentials for ordinary local testing.
+
+Credentials stored in the host `.aws` directory are not automatically visible inside a
+Docker container. For Compose, use the untracked `.env` variables above, or create a
+local Compose override that mounts the host credentials file read-only into
+`/root/.aws/`. Keep that override out of Git.
+
+## Email in Docker
+
+Email is disabled by default in the Compose environment. To enable Gmail SMTP, add the
+following to the backend `.env` and recreate the API container:
+
+```dotenv
+EMAIL_ENABLED=true
+EMAIL_PROVIDER=Gmail
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USE_SSL=true
+EMAIL_USERNAME=you@example.com
+EMAIL_PASSWORD=your-gmail-app-password
+EMAIL_FROM_ADDRESS=you@example.com
+EMAIL_FROM_NAME=ParkingSaaS
+EMAIL_APP_BASE_URL=http://localhost:5173
+```
+
+Use a Gmail app password, not the normal account password:
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d --build api
+```
+
+## Native development prerequisites (optional)
 
 - **.NET 10 SDK** — `dotnet --version` should print `10.x`.
 - **PostgreSQL** listening on port 5432, with database `parkingsaas`, user `parking`,
   password `parking` (this is `ConnectionStrings:Default`). A local install is fine; a
   container works too, see [Running PostgreSQL in Docker](#running-postgresql-in-docker).
 
-## Quick start
+## Native backend quick start (optional)
 
 ```bash
 dotnet run --project src/ParkingSaaS.Api --launch-profile http
@@ -26,7 +233,7 @@ on port 5000, and you get no Swagger, no seed data, and no user-secrets. Alterna
 `ASPNETCORE_ENVIRONMENT=Development` in your shell.
 
 On startup in Development the app applies EF migrations and seeds only the platform account. Because
-`Database:ResetOnStartup` is `true` in `appsettings.Development.json`, **the database is
+`Database:ResetOnStartup` is `false` in `appsettings.Development.json`, **the database is
 dropped and rebuilt on every boot** — expected locally, and it can never fire outside
 Development (`Program.cs` gates it on the environment).
 
@@ -36,7 +243,7 @@ Development (`Program.cs` gates it on the environment).
 |---|---|---|
 | Platform administrator | `platform@parking.local` | `Platform!2026` |
 
-## Secrets
+## Native development secrets (optional)
 
 Development secrets live in .NET user-secrets, not in the repo. They are keyed to the
 `UserSecretsId` in `src/ParkingSaaS.Api/ParkingSaaS.Api.csproj` and stored under
@@ -64,12 +271,12 @@ To skip email entirely instead, set `Email:Enabled` to `false` in
 `Email:Enabled` is validated at startup: if the selected provider is incomplete, or
 `Email:FromAddress` is empty, the app refuses to boot rather than silently dropping mail.
 
-## Docker
+## Docker Compose reference
 
 `deploy/docker-compose.yml` is a portable development stack for WSL, Linux, macOS, and
 Windows Docker Desktop. It starts PostgreSQL and the API.
 
-### Running from WSL
+### Running from WSL (alternative)
 
 Install Docker Desktop on the host, enable its WSL 2 integration for your distribution, then
 run these commands from the repository root in WSL:
@@ -79,8 +286,9 @@ docker compose -f deploy/docker-compose.yml config
 docker compose -f deploy/docker-compose.yml up --build
 ```
 
-The root `.env` file is optional. The Compose stack uses the PayMongo test credentials
-bundled in `appsettings.json` unless you provide overrides.
+The backend `.env` file is optional for the database-only flow. PayMongo credentials are
+not bundled and there is no global fallback; connect each tenant's own account through
+the application using AWS Secrets Manager.
 
 The API is available at <http://localhost:5274> and PostgreSQL at `localhost:5432`. If a
 port is already in use, change the matching value in `.env`. Named volumes keep the database
@@ -159,7 +367,8 @@ the Compose v2 plugin, and probably no daemon. Install Docker Desktop, or just r
 PostgreSQL on the host.
 
 **Swagger 404, no seed users, port is 5000** — you ran without a launch profile, so the app
-started in Production. See [Quick start](#quick-start).
+started in Production. The recommended Docker Compose flow uses Development automatically;
+see [Recommended Docker Compose workflow](#recommended-docker-compose-workflow).
 
 **`Email:Enabled is true but Email:Host is not set`** — a startup validation failure from
 `EmailOptions`. Fill in the `Email` section or set `Enabled` to `false`.

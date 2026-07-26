@@ -37,6 +37,7 @@ public sealed class AppDbContext : DbContext, IApplicationDbContext
     public DbSet<RatePlanVersion> RatePlanVersions => Set<RatePlanVersion>();
     public DbSet<FeeQuote> FeeQuotes => Set<FeeQuote>();
     public DbSet<Payment> Payments => Set<Payment>();
+    public DbSet<TenantPayMongoConnection> TenantPayMongoConnections => Set<TenantPayMongoConnection>();
     public DbSet<WebhookEvent> WebhookEvents => Set<WebhookEvent>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<EmailMessage> Emails => Set<EmailMessage>();
@@ -65,6 +66,8 @@ public sealed class AppDbContext : DbContext, IApplicationDbContext
             .HasQueryFilter(q => _tenant.IsPlatformAdministrator || q.TenantId == _tenant.TenantId);
         modelBuilder.Entity<Payment>()
             .HasQueryFilter(p => _tenant.IsPlatformAdministrator || p.TenantId == _tenant.TenantId);
+        modelBuilder.Entity<TenantPayMongoConnection>()
+            .HasQueryFilter(c => _tenant.IsPlatformAdministrator || c.TenantId == _tenant.TenantId);
         modelBuilder.Entity<AuditLog>()
             .HasQueryFilter(a => _tenant.IsPlatformAdministrator || a.TenantId == _tenant.TenantId);
         // WebhookEvent is provider-global (not tenant-owned) and is intentionally unfiltered.

@@ -20,6 +20,13 @@ public sealed class PaymentWebhooksController : ApiControllerBase
 
     [HttpPost("paymongo")]
     public async Task<IActionResult> PayMongo(CancellationToken ct)
+        => await Process(null, ct);
+
+    [HttpPost("paymongo/{webhookToken}")]
+    public async Task<IActionResult> PayMongoTenant(string webhookToken, CancellationToken ct)
+        => await Process(webhookToken, ct);
+
+    private async Task<IActionResult> Process(string? webhookToken, CancellationToken ct)
     {
         // Preserve the exact bytes for signature verification.
         Request.EnableBuffering();
@@ -28,7 +35,7 @@ public sealed class PaymentWebhooksController : ApiControllerBase
 
         var signature = Request.Headers["Paymongo-Signature"].ToString();
 
-        var outcome = await _webhooks.ProcessPayMongoAsync(rawBody, signature, ct);
+        var outcome = await _webhooks.ProcessPayMongoAsync(rawBody, signature, webhookToken, ct);
         return outcome switch
         {
             WebhookOutcome.InvalidSignature => BadRequest(new { error = "invalid_signature" }),

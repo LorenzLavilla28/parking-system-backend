@@ -16,4 +16,5 @@ public interface IPaymentWebhookService
     /// The outcome tells the controller which HTTP status to return.
     /// </summary>
     Task<WebhookOutcome> ProcessPayMongoAsync(string rawPayload, string signatureHeader, CancellationToken ct);
+    Task<WebhookOutcome> ProcessPayMongoAsync(string rawPayload, string signatureHeader, string? webhookToken, CancellationToken ct);
 }

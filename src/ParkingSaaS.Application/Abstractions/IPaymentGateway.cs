@@ -16,7 +16,8 @@ public sealed record CreateCheckoutRequest(
 public sealed record CreateCheckoutResult(
     string ProviderCheckoutId,
     string CheckoutUrl,
-    string RawProviderReference);
+    string RawProviderReference,
+    string? ProviderAccountId = null);
 
 public sealed record PaymentStatusResult(
     PaymentStatus Status,
@@ -45,7 +46,11 @@ public sealed record WebhookVerificationResult(
 public interface IPaymentGateway
 {
     Task<CreateCheckoutResult> CreateCheckoutAsync(CreateCheckoutRequest request, CancellationToken cancellationToken);
+    Task<CreateCheckoutResult> CreateCheckoutAsync(Guid tenantId, CreateCheckoutRequest request, CancellationToken cancellationToken);
     Task<PaymentStatusResult> GetPaymentStatusAsync(string providerReference, CancellationToken cancellationToken);
+    Task<PaymentStatusResult> GetPaymentStatusAsync(Guid tenantId, string providerReference, CancellationToken cancellationToken);
     Task ExpireCheckoutAsync(string providerReference, CancellationToken cancellationToken);
+    Task ExpireCheckoutAsync(Guid tenantId, string providerReference, CancellationToken cancellationToken);
     Task<WebhookVerificationResult> VerifyWebhookAsync(string rawPayload, string signatureHeader, CancellationToken cancellationToken);
+    Task<WebhookVerificationResult> VerifyWebhookAsync(Guid tenantId, string rawPayload, string signatureHeader, CancellationToken cancellationToken);
 }

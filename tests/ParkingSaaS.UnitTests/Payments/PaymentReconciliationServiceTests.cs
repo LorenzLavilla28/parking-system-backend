@@ -23,6 +23,7 @@ public sealed class PaymentReconciliationServiceTests
     private readonly TestClock _clock = new(new DateTimeOffset(2026, 6, 24, 18, 0, 0, TimeSpan.Zero));
     private readonly FakePaymentGateway _gateway = new();
     private readonly FakeSessionRealtimeNotifier _realtime = new();
+    private readonly FakeSessionPricingService _pricing = new();
     private readonly AppDbContext _db;
     private readonly PaymentReconciliationService _service;
 
@@ -31,7 +32,7 @@ public sealed class PaymentReconciliationServiceTests
         _tenant.ScopeTo(_tenantId);
         _db = InMemoryDb.Create(_tenant);
         _service = new PaymentReconciliationService(
-            _db, _gateway, new PaymentSettler(_db, TestEmail.Queue(_db), new FakeSessionPricingService()), _clock, _realtime,
+            _db, _gateway, new PaymentSettler(_db, TestEmail.Queue(_db), _pricing), _pricing, _clock, _realtime,
             Options.Create(new PayMongoOptions { ReconcilePendingOlderThanMinutes = 3 }),
             NullLogger<PaymentReconciliationService>.Instance,
             TestEmail.Queue(_db), new FakeParkingTokenService(), new FakeQrCodeGenerator(),
@@ -140,6 +141,7 @@ public sealed class PaymentReconciliationServiceTests
     [Fact]
     public async Task Expired_paid_exit_window_is_marked_overstay_and_broadcast()
     {
+        _pricing.Result = FeeResults.Of(100m);
         var location = new ParkingLocation(_tenantId, "Lot", "lot-overstay", "Asia/Manila", null);
         _db.ParkingLocations.Add(location);
         var session = ParkingSession.RecordEntry(_tenantId, location.Id, Guid.NewGuid(), "OVER123", "OVER123",

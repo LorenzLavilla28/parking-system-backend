@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Common.Options;
+using ParkingSaaS.Application.Payments;
 using ParkingSaaS.Domain.Payments;
 
 namespace ParkingSaaS.Infrastructure.Payments.PayMongo;
@@ -20,21 +21,32 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
 {
     private readonly HttpClient _http;
     private readonly PayMongoOptions _options;
+    private readonly IPayMongoCredentialsResolver _credentials;
     private readonly ILogger<PayMongoPaymentGateway> _logger;
 
-    public PayMongoPaymentGateway(HttpClient http, IOptions<PayMongoOptions> options, ILogger<PayMongoPaymentGateway> logger)
+    public PayMongoPaymentGateway(
+        HttpClient http,
+        IOptions<PayMongoOptions> options,
+        IPayMongoCredentialsResolver credentials,
+        ILogger<PayMongoPaymentGateway> logger)
     {
         _http = http;
         _options = options.Value;
+        _credentials = credentials;
         _logger = logger;
 
         _http.BaseAddress ??= new Uri(_options.BaseUrl.TrimEnd('/') + "/");
-        var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{_options.SecretKey}:"));
-        _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", basic);
     }
 
-    public async Task<CreateCheckoutResult> CreateCheckoutAsync(CreateCheckoutRequest request, CancellationToken ct)
+    public Task<CreateCheckoutResult> CreateCheckoutAsync(CreateCheckoutRequest request, CancellationToken ct)
+        => CreateCheckoutInternalAsync(null, request, ct);
+
+    public Task<CreateCheckoutResult> CreateCheckoutAsync(Guid tenantId, CreateCheckoutRequest request, CancellationToken ct)
+        => CreateCheckoutInternalAsync(tenantId, request, ct);
+
+    private async Task<CreateCheckoutResult> CreateCheckoutInternalAsync(Guid? tenantId, CreateCheckoutRequest request, CancellationToken ct)
     {
+        var credentials = await GetCredentialsAsync(tenantId, ct);
         // Methods offered on the hosted page come from configuration (GCash + QR Ph by
         // default); fall back to a sane set if misconfigured to an empty list.
         var paymentMethodTypes = _options.PaymentMethodTypes is { Length: > 0 }
@@ -68,7 +80,9 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
             }
         };
 
-        using var response = await _http.PostAsJsonAsync("checkout_sessions", body, ct);
+        using var httpRequest = CreateRequest(HttpMethod.Post, "checkout_sessions", credentials);
+        httpRequest.Content = JsonContent.Create(body);
+        using var response = await _http.SendAsync(httpRequest, ct);
         await EnsureSuccessAsync(response, "create checkout", ct);
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
@@ -77,12 +91,20 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
         var attributes = data.GetProperty("attributes");
         var checkoutUrl = attributes.TryGetProperty("checkout_url", out var url) ? url.GetString()! : string.Empty;
 
-        return new CreateCheckoutResult(id, checkoutUrl, id);
+        return new CreateCheckoutResult(id, checkoutUrl, id, credentials.PayMongoAccountId);
     }
 
-    public async Task<PaymentStatusResult> GetPaymentStatusAsync(string providerReference, CancellationToken ct)
+    public Task<PaymentStatusResult> GetPaymentStatusAsync(string providerReference, CancellationToken ct)
+        => GetPaymentStatusInternalAsync(null, providerReference, ct);
+
+    public Task<PaymentStatusResult> GetPaymentStatusAsync(Guid tenantId, string providerReference, CancellationToken ct)
+        => GetPaymentStatusInternalAsync(tenantId, providerReference, ct);
+
+    private async Task<PaymentStatusResult> GetPaymentStatusInternalAsync(Guid? tenantId, string providerReference, CancellationToken ct)
     {
-        using var response = await _http.GetAsync($"checkout_sessions/{providerReference}", ct);
+        var credentials = await GetCredentialsAsync(tenantId, ct);
+        using var response = await _http.SendAsync(
+            CreateRequest(HttpMethod.Get, $"checkout_sessions/{providerReference}", credentials), ct);
         await EnsureSuccessAsync(response, "get checkout", ct);
 
         using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
@@ -117,17 +139,36 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
         return new PaymentStatusResult(PaymentStatus.Pending, null, null, null, null);
     }
 
-    public async Task ExpireCheckoutAsync(string providerReference, CancellationToken ct)
+    public Task ExpireCheckoutAsync(string providerReference, CancellationToken ct)
+        => ExpireCheckoutInternalAsync(null, providerReference, ct);
+
+    public Task ExpireCheckoutAsync(Guid tenantId, string providerReference, CancellationToken ct)
+        => ExpireCheckoutInternalAsync(tenantId, providerReference, ct);
+
+    private async Task ExpireCheckoutInternalAsync(Guid? tenantId, string providerReference, CancellationToken ct)
     {
-        using var response = await _http.PostAsync($"checkout_sessions/{providerReference}/expire", content: null, ct);
+        var credentials = await GetCredentialsAsync(tenantId, ct);
+        using var response = await _http.SendAsync(
+            CreateRequest(HttpMethod.Post, $"checkout_sessions/{providerReference}/expire", credentials), ct);
         if (!response.IsSuccessStatusCode)
             _logger.LogWarning("PayMongo expire checkout returned {Status} for {Ref}.", (int)response.StatusCode, providerReference);
     }
 
     public Task<WebhookVerificationResult> VerifyWebhookAsync(string rawPayload, string signatureHeader, CancellationToken ct)
+        => VerifyWebhookInternalAsync(null, rawPayload, signatureHeader, ct);
+
+    public Task<WebhookVerificationResult> VerifyWebhookAsync(Guid tenantId, string rawPayload, string signatureHeader, CancellationToken ct)
+        => VerifyWebhookInternalAsync(tenantId, rawPayload, signatureHeader, ct);
+
+    private async Task<WebhookVerificationResult> VerifyWebhookInternalAsync(
+        Guid? tenantId,
+        string rawPayload,
+        string signatureHeader,
+        CancellationToken ct)
     {
-        if (!PayMongoSignature.Verify(rawPayload, signatureHeader, _options.WebhookSecret, out _))
-            return Task.FromResult(Invalid());
+        var credentials = await GetCredentialsAsync(tenantId, ct);
+        if (!PayMongoSignature.Verify(rawPayload, signatureHeader, credentials.WebhookSecret, out _))
+            return Invalid();
 
         try
         {
@@ -170,14 +211,29 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
                 method = ReadPaymentMethod(resourceAttr);
             }
 
-            return Task.FromResult(new WebhookVerificationResult(
-                true, eventId, eventType, checkoutId, paymentId, mapped, amount, currency, method));
+            return new WebhookVerificationResult(
+                true, eventId, eventType, checkoutId, paymentId, mapped, amount, currency, method);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to parse a signature-valid PayMongo webhook payload.");
-            return Task.FromResult(new WebhookVerificationResult(true, null, null, null, null, null, null, null, null));
+            return new WebhookVerificationResult(true, null, null, null, null, null, null, null, null);
         }
+    }
+
+    private async Task<ResolvedPayMongoCredentials> GetCredentialsAsync(Guid? tenantId, CancellationToken ct)
+        => await _credentials.ResolveAsync(tenantId, ct)
+           ?? throw new InvalidOperationException("PayMongo is not configured for this tenant.");
+
+    private static HttpRequestMessage CreateRequest(
+        HttpMethod method,
+        string path,
+        ResolvedPayMongoCredentials credentials)
+    {
+        var request = new HttpRequestMessage(method, path);
+        var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{credentials.SecretKey}:"));
+        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", basic);
+        return request;
     }
 
     private static WebhookVerificationResult Invalid()
@@ -203,4 +259,5 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
         _logger.LogError("PayMongo {Action} failed with {Status}.", action, (int)response.StatusCode);
         throw new InvalidOperationException($"PayMongo {action} failed ({(int)response.StatusCode}): {detail}");
     }
+
 }

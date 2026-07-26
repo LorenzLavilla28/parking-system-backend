@@ -49,6 +49,8 @@ public static class DependencyInjection
         services.AddScoped<IPaymentWebhookService, PaymentWebhookService>();
         services.AddScoped<IPaymentReconciliationService, PaymentReconciliationService>();
         services.AddScoped<IPaymentTrackingService, PaymentTrackingService>();
+        services.AddScoped<IPayMongoConnectionService, PayMongoConnectionService>();
+        services.AddScoped<IPayMongoCredentialsResolver, PayMongoCredentialsResolver>();
 
         // Email queue (transactional outbox + background dispatcher).
         services.AddScoped<IEmailQueue, EmailQueue>();

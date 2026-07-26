@@ -20,6 +20,7 @@ public sealed class PaymentConfiguration : IEntityTypeConfiguration<Payment>
         b.Property(p => p.ProviderCheckoutSessionId).HasMaxLength(128);
         b.Property(p => p.ProviderCheckoutUrl).HasMaxLength(500);
         b.Property(p => p.ProviderPaymentId).HasMaxLength(128);
+        b.Property(p => p.ProviderAccountId).HasMaxLength(128);
         b.Property(p => p.PublicReferenceHash).HasMaxLength(64).IsRequired();
         b.Property(p => p.PublicReferenceProtected).IsRequired();
         b.Property(p => p.IdempotencyKey).HasMaxLength(80).IsRequired();

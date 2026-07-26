@@ -27,6 +27,7 @@ public sealed class CustomerPricingServiceTests
     private readonly ParkingTokenService _tokens = new(new EphemeralDataProtectionProvider());
     private readonly AppDbContext _db;
     private readonly CustomerPricingService _service;
+    private readonly SessionPricingService _pricing;
     private ParkingLocation _location = null!;
     private RatePlanVersion _version = null!;
 
@@ -35,9 +36,9 @@ public sealed class CustomerPricingServiceTests
         _tenant.ScopeTo(_tenantId);
         _db = InMemoryDb.Create(_tenant);
 
-        var pricing = new SessionPricingService(_db, new ParkingFeeCalculator());
+        _pricing = new SessionPricingService(_db, new ParkingFeeCalculator());
         _service = new CustomerPricingService(
-            _db, _tokens, pricing, _clock,
+            _db, _tokens, _pricing, new FakePayMongoCredentialsResolver(), _clock,
             Options.Create(new PricingOptions { FeeQuoteMinutes = 10 }),
             NullLogger<CustomerPricingService>.Instance);
 
@@ -94,6 +95,21 @@ public sealed class CustomerPricingServiceTests
     }
 
     [Fact]
+    public async Task Paid_first_block_remains_covered_during_exit_grace()
+    {
+        var entry = _clock.UtcNow.AddHours(-3).AddMinutes(-10);
+        var token = AddSession(entry, _version.Id);
+        var session = await _db.ParkingSessions.IgnoreQueryFilters().SingleAsync();
+        session.RegisterPayment(50m, entry.AddHours(3).AddMinutes(15));
+        await _db.SaveChangesAsync();
+
+        var fee = await _service.GetCurrentFeeAsync(token, CancellationToken.None);
+
+        fee.TotalAmount.Should().Be(50m);
+        fee.Outstanding.Should().Be(0m);
+    }
+
+    [Fact]
     public async Task Current_fee_unavailable_when_no_rate_plan_pinned()
     {
         var token = AddSession(_clock.UtcNow.AddHours(-2), versionId: null);
@@ -118,6 +134,18 @@ public sealed class CustomerPricingServiceTests
         var stored = await _db.FeeQuotes.IgnoreQueryFilters().SingleAsync();
         stored.TotalAmount.Should().Be(90m);
         stored.ParkingSessionId.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task Paid_exit_deadline_uses_end_of_first_block_when_paid_inside_it()
+    {
+        var entry = _clock.UtcNow.AddHours(-1);
+        var token = AddSession(entry, _version.Id);
+        var session = await _db.ParkingSessions.IgnoreQueryFilters().SingleAsync();
+
+        var deadline = await _pricing.GetPaidExitDeadlineAsync(session, _clock.UtcNow, CancellationToken.None);
+
+        deadline.Should().Be(entry.AddHours(3).AddMinutes(15));
     }
 
     [Fact]

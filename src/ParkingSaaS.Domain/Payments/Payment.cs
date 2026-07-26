@@ -19,6 +19,7 @@ public class Payment : AuditableEntity, ITenantOwned
     public string? ProviderCheckoutSessionId { get; private set; }
     public string? ProviderCheckoutUrl { get; private set; }
     public string? ProviderPaymentId { get; private set; }
+    public string? ProviderAccountId { get; private set; }
 
     public string Currency { get; private set; } = "PHP";
     public decimal Amount { get; private set; }
@@ -103,6 +104,9 @@ public class Payment : AuditableEntity, ITenantOwned
         ProviderCheckoutSessionId = providerCheckoutSessionId;
         ProviderCheckoutUrl = checkoutUrl;
     }
+
+    public void SetProviderAccountId(string? providerAccountId)
+        => ProviderAccountId = string.IsNullOrWhiteSpace(providerAccountId) ? null : providerAccountId.Trim();
 
     public void MarkProcessing()
     {

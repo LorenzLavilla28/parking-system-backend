@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Common.Options;
+using ParkingSaaS.Application.Payments;
 using ParkingSaaS.Infrastructure.Payments.PayMongo;
 using Xunit;
 
@@ -36,7 +37,10 @@ public sealed class PayMongoPaymentGatewayTests
         var handler = new CapturingHandler(CheckoutResponse);
         var http = new HttpClient(handler);
         var gateway = new PayMongoPaymentGateway(
-            http, Options.Create(options), NullLogger<PayMongoPaymentGateway>.Instance);
+            http,
+            Options.Create(options),
+            new StaticCredentialsResolver(options),
+            NullLogger<PayMongoPaymentGateway>.Instance);
         return (gateway, handler);
     }
 
@@ -85,6 +89,23 @@ public sealed class PayMongoPaymentGatewayTests
         return doc.RootElement
             .GetProperty("data").GetProperty("attributes").GetProperty("payment_method_types")
             .EnumerateArray().Select(e => e.GetString()!).ToList();
+    }
+
+    private sealed class StaticCredentialsResolver : IPayMongoCredentialsResolver
+    {
+        private readonly PayMongoOptions _options;
+
+        public StaticCredentialsResolver(PayMongoOptions options) => _options = options;
+
+        public Task<ResolvedPayMongoCredentials?> ResolveAsync(
+            Guid? tenantId,
+            CancellationToken cancellationToken)
+            => Task.FromResult<ResolvedPayMongoCredentials?>(
+                string.IsNullOrWhiteSpace(_options.SecretKey)
+                    ? null
+                    : new(_options.SecretKey, _options.WebhookSecret, true));
+
+        public void Invalidate(Guid tenantId, string environment) { }
     }
 
     private sealed class CapturingHandler : HttpMessageHandler

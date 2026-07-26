@@ -41,8 +41,6 @@ public sealed class PaymentSettler : IPaymentSettler
             .Where(l => l.Id == session.ParkingLocationId)
             .Select(l => new { l.Name })
             .FirstOrDefaultAsync(ct);
-        var graceMinutes = await _pricing.GetPaidExitGraceMinutesAsync(session, ct);
-
         payment.MarkPaid(providerPaymentId, method, paidAt);
 
         if (payment.FeeQuoteId is { } quoteId)
@@ -52,7 +50,7 @@ public sealed class PaymentSettler : IPaymentSettler
                 quote.MarkUsed();
         }
 
-        var deadline = paidAt.AddMinutes(graceMinutes);
+        var deadline = await _pricing.GetPaidExitDeadlineAsync(session, paidAt, ct);
         session.RegisterPayment(payment.Amount, deadline);
 
         // Queue the receipt if the customer left an email — staged on the same unit of work

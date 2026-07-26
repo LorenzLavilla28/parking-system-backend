@@ -168,7 +168,7 @@ public sealed class GuardSessionService : IGuardSessionService
             s.VehicleType.ToString(),
             s.VehicleColor,
             s.EntryTime,
-            s.EffectiveStatus(now).ToString(),
+            s.EffectiveStatus(now, calculatedFee).ToString(),
             result is not null,
             result?.Currency ?? "PHP",
             s.EffectiveFee(calculatedFee),

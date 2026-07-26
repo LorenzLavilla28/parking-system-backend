@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Common.Options;
+using ParkingSaaS.Application.Pricing;
 using ParkingSaaS.Contracts.Realtime;
 using ParkingSaaS.Domain.Payments;
 using ParkingSaaS.Domain.Pricing;
@@ -21,6 +22,7 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
     private readonly IApplicationDbContext _db;
     private readonly IPaymentGateway _gateway;
     private readonly IPaymentSettler _settler;
+    private readonly ISessionPricingService _pricing;
     private readonly IDateTime _clock;
     private readonly ISessionRealtimeNotifier _realtime;
     private readonly IEmailQueue? _emailQueue;
@@ -34,6 +36,7 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
         IApplicationDbContext db,
         IPaymentGateway gateway,
         IPaymentSettler settler,
+        ISessionPricingService pricing,
         IDateTime clock,
         ISessionRealtimeNotifier realtime,
         IOptions<PayMongoOptions> options,
@@ -46,6 +49,7 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
         _db = db;
         _gateway = gateway;
         _settler = settler;
+        _pricing = pricing;
         _clock = clock;
         _realtime = realtime;
         _options = options.Value;
@@ -78,7 +82,7 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
         {
             try
             {
-                var status = await _gateway.GetPaymentStatusAsync(payment.ProviderCheckoutSessionId!, ct);
+                var status = await _gateway.GetPaymentStatusAsync(payment.TenantId, payment.ProviderCheckoutSessionId!, ct);
                 switch (status.Status)
                 {
                     case PaymentStatus.Paid:
@@ -110,9 +114,10 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
         var reverts = await RevertAbandonedSessionsAsync(abandoned, ct);
 
         var quotesExpired = await ExpireStaleQuotesAsync(now, ct);
+        var deadlineUpdates = await RefreshPaidExitDeadlinesAsync(now, ct);
         var overdue = await MarkOverdueSessionsAsync(now, ct);
 
-        if (open.Count > 0 || quotesExpired > 0 || overdue.Count > 0)
+        if (open.Count > 0 || quotesExpired > 0 || deadlineUpdates > 0 || overdue.Count > 0)
             await _db.SaveChangesAsync(ct);
 
         // Broadcast each settlement only after the batch has durably committed.
@@ -135,11 +140,49 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
                 new SessionRealtimeEvent(session.Id, session.ParkingLocationId, session.Status.ToString(),
                     session.PlateNumberRaw, SessionEventKind.OverstayDue), ct);
 
-        if (settled > 0 || failed > 0 || quotesExpired > 0 || overdue.Count > 0)
-            _logger.LogInformation("Reconcile: checked {Checked}, settled {Settled}, failed {Failed}, quotes expired {Quotes}, overstays marked {Overstays}.",
-                open.Count, settled, failed, quotesExpired, overdue.Count);
+        if (settled > 0 || failed > 0 || quotesExpired > 0 || deadlineUpdates > 0 || overdue.Count > 0)
+            _logger.LogInformation("Reconcile: checked {Checked}, settled {Settled}, failed {Failed}, quotes expired {Quotes}, deadlines refreshed {Deadlines}, overstays marked {Overstays}.",
+                open.Count, settled, failed, quotesExpired, deadlineUpdates, overdue.Count);
 
         return new ReconciliationSummary(open.Count, settled, failed, quotesExpired, overdue.Count);
+    }
+
+    private async Task<int> RefreshPaidExitDeadlinesAsync(DateTimeOffset now, CancellationToken ct)
+    {
+        var sessions = await _db.ParkingSessions
+            .IgnoreQueryFilters()
+            .Where(s => (s.Status == ParkingSessionStatus.PaidExitWindow || s.Status == ParkingSessionStatus.OverstayDue)
+                        && s.PaidExitDeadline != null)
+            .Take(500)
+            .ToListAsync(ct);
+
+        var updated = 0;
+        foreach (var session in sessions)
+        {
+            var paidAt = await _db.Payments
+                .IgnoreQueryFilters()
+                .Where(p => p.ParkingSessionId == session.Id
+                            && p.Status == PaymentStatus.Paid
+                            && p.PaidAt != null)
+                .OrderByDescending(p => p.PaidAt)
+                .Select(p => p.PaidAt)
+                .FirstOrDefaultAsync(ct);
+            if (paidAt is null)
+                continue;
+
+            var correctedDeadline = await _pricing.GetPaidExitDeadlineAsync(session, paidAt.Value, ct);
+            if (session.PaidExitDeadline != correctedDeadline)
+            {
+                session.CorrectPaidExitDeadline(correctedDeadline);
+                updated++;
+            }
+
+            var calculation = await _pricing.CalculateAsync(session, now, discount: null, ct);
+            if (calculation is not null)
+                session.RefreshTimeBasedStatus(now, calculation.TotalAmount);
+        }
+
+        return updated;
     }
 
     /// <summary>
@@ -193,7 +236,7 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
 
     private async Task<List<ParkingSession>> MarkOverdueSessionsAsync(DateTimeOffset now, CancellationToken ct)
     {
-        var overdue = await _db.ParkingSessions
+        var candidates = await _db.ParkingSessions
             .IgnoreQueryFilters()
             .Where(s => s.Status == ParkingSessionStatus.PaidExitWindow
                         && s.PaidExitDeadline != null
@@ -202,8 +245,13 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
             .Take(500)
             .ToListAsync(ct);
 
-        foreach (var session in overdue)
+        var overdue = new List<ParkingSession>();
+        foreach (var session in candidates)
         {
+            var calculation = await _pricing.CalculateAsync(session, now, discount: null, ct);
+            if (calculation is null || session.Outstanding(calculation.TotalAmount) <= 0m)
+                continue;
+
             if (_emailQueue is not null && session.PaidExitDeadline is { } deadline)
             {
                 var recipient = await _db.Payments
@@ -229,6 +277,7 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
                 }
             }
             session.MarkOverstay();
+            overdue.Add(session);
         }
 
         return overdue;

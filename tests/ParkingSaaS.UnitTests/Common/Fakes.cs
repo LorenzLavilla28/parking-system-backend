@@ -3,6 +3,7 @@ using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Common.Options;
 using ParkingSaaS.Application.Emails;
 using ParkingSaaS.Application.Pricing;
+using ParkingSaaS.Application.Payments;
 using ParkingSaaS.Contracts.Realtime;
 using ParkingSaaS.Domain.Emails;
 using ParkingSaaS.Domain.Payments;
@@ -108,6 +109,21 @@ public sealed class FakeSessionPricingService : ISessionPricingService
 
     public Task<int> GetPaidExitGraceMinutesAsync(ParkingSession session, CancellationToken ct)
         => Task.FromResult(15);
+
+    public Task<DateTimeOffset> GetPaidExitDeadlineAsync(ParkingSession session, DateTimeOffset paidAt, CancellationToken ct)
+        => Task.FromResult(paidAt.AddMinutes(15));
+}
+
+/// <summary>Tenant PayMongo credential resolver used by payment-service tests.</summary>
+public sealed class FakePayMongoCredentialsResolver : IPayMongoCredentialsResolver
+{
+    public ResolvedPayMongoCredentials? Result { get; set; } =
+        new("sk_test_fake", "whsec_test_fake", false, "acct_test_fake");
+
+    public Task<ResolvedPayMongoCredentials?> ResolveAsync(Guid? tenantId, CancellationToken cancellationToken)
+        => Task.FromResult(Result);
+
+    public void Invalidate(Guid tenantId, string environment) { }
 }
 
 /// <summary>Payment gateway whose responses the test controls and whose calls it inspects.</summary>
@@ -131,8 +147,14 @@ public sealed class FakePaymentGateway : IPaymentGateway
         return Task.FromResult(CheckoutResult);
     }
 
+    public Task<CreateCheckoutResult> CreateCheckoutAsync(Guid tenantId, CreateCheckoutRequest request, CancellationToken ct)
+        => CreateCheckoutAsync(request, ct);
+
     public Task<PaymentStatusResult> GetPaymentStatusAsync(string providerReference, CancellationToken ct)
         => Task.FromResult(StatusResult);
+
+    public Task<PaymentStatusResult> GetPaymentStatusAsync(Guid tenantId, string providerReference, CancellationToken ct)
+        => GetPaymentStatusAsync(providerReference, ct);
 
     public Task ExpireCheckoutAsync(string providerReference, CancellationToken ct)
     {
@@ -140,6 +162,12 @@ public sealed class FakePaymentGateway : IPaymentGateway
         return Task.CompletedTask;
     }
 
+    public Task ExpireCheckoutAsync(Guid tenantId, string providerReference, CancellationToken ct)
+        => ExpireCheckoutAsync(providerReference, ct);
+
     public Task<WebhookVerificationResult> VerifyWebhookAsync(string rawPayload, string signatureHeader, CancellationToken ct)
         => Task.FromResult(VerificationResult);
+
+    public Task<WebhookVerificationResult> VerifyWebhookAsync(Guid tenantId, string rawPayload, string signatureHeader, CancellationToken ct)
+        => VerifyWebhookAsync(rawPayload, signatureHeader, ct);
 }

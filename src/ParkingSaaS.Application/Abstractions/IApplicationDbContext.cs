@@ -30,6 +30,7 @@ public interface IApplicationDbContext
     DbSet<RatePlanVersion> RatePlanVersions { get; }
     DbSet<FeeQuote> FeeQuotes { get; }
     DbSet<Payment> Payments { get; }
+    DbSet<TenantPayMongoConnection> TenantPayMongoConnections { get; }
     DbSet<WebhookEvent> WebhookEvents { get; }
     DbSet<AuditLog> AuditLogs { get; }
     DbSet<EmailMessage> Emails { get; }

@@ -185,21 +185,20 @@ public sealed class GuardExitServiceTests
     }
 
     [Fact]
-    public async Task Overdue_session_is_not_paid_even_when_current_fee_equals_amount_paid()
+    public async Task Expired_exit_window_with_no_outstanding_balance_can_exit()
     {
         var s = AddSession(totalPaid: 50m, deadline: _clock.UtcNow.AddMinutes(-1));
         _pricing.Result = FeeResults.Of(50m);
 
         var status = await _service.GetExitStatusAsync(s.Id, CancellationToken.None);
 
-        status.Status.Should().Be(nameof(ParkingSessionStatus.OverstayDue));
-        status.Decision.Should().Be("AdditionalPaymentRequired");
+        status.Status.Should().Be(nameof(ParkingSessionStatus.PaidExitWindow));
+        status.Decision.Should().Be("Paid");
         status.Outstanding.Should().Be(0m);
-        status.CanApproveExit.Should().BeFalse();
+        status.CanApproveExit.Should().BeTrue();
 
-        var act = async () => await _service.ApproveExitAsync(
+        var result = await _service.ApproveExitAsync(
             new ApproveExitRequest(s.Id, null, null, null), null, CancellationToken.None);
-        await act.Should().ThrowAsync<ConflictException>()
-            .WithMessage("This session is overdue. The outstanding balance must be paid before exit.");
+        result.Status.Should().Be(nameof(ParkingSessionStatus.Exited));
     }
 }

@@ -43,8 +43,16 @@ public sealed class SessionPricingService : ISessionPricingService
             .FirstOrDefaultAsync(ct) ?? "UTC";
 
         var rules = PricingRules.Parse(version.RulesJson);
+        var calculationTime = at;
+        if (session.PaidExitDeadline is { } deadline && at <= deadline)
+        {
+            // Paid exit grace pauses succeeding-hour billing until the deadline.
+            // The stored deadline is anchored to the paid-through period, so
+            // subtracting grace gives the point at which billing may resume.
+            calculationTime = new[] { at, deadline.AddMinutes(-rules.PaidExitGraceMinutes) }.Min();
+        }
         var input = new FeeCalculationInput(
-            session.EntryTime, at, session.VehicleType, version.Id, version.VersionNumber, rules, timezone, discount);
+            session.EntryTime, calculationTime, session.VehicleType, version.Id, version.VersionNumber, rules, timezone, discount);
 
         return _calculator.Calculate(input);
     }
@@ -65,5 +73,66 @@ public sealed class SessionPricingService : ISessionPricingService
             return 0;
 
         return PricingRules.Parse(rulesJson).PaidExitGraceMinutes;
+    }
+
+    public async Task<DateTimeOffset> GetPaidExitDeadlineAsync(
+        ParkingSession session, DateTimeOffset paidAt, CancellationToken ct)
+    {
+        var graceMinutes = await GetPaidExitGraceMinutesAsync(session, ct);
+        var paidThrough = paidAt;
+
+        if (session.RatePlanVersionId is { } versionId)
+        {
+            var version = await _db.RatePlanVersions
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .FirstOrDefaultAsync(v => v.Id == versionId, ct);
+            if (version is not null)
+            {
+                var timezone = await _db.ParkingLocations
+                    .IgnoreQueryFilters()
+                    .AsNoTracking()
+                    .Where(l => l.Id == session.ParkingLocationId)
+                    .Select(l => l.Timezone)
+                    .FirstOrDefaultAsync(ct) ?? "UTC";
+                var rules = PricingRules.Parse(version.RulesJson);
+                var block = SelectBlock(rules, session.VehicleType, session.EntryTime, timezone);
+
+                if (block.Type == RateType.FirstBlock && block.FirstHours > 0)
+                {
+                    var firstBlockEnd = session.EntryTime.AddHours(block.FirstHours);
+                    if (paidAt <= firstBlockEnd)
+                        paidThrough = firstBlockEnd;
+                }
+            }
+        }
+
+        return paidThrough.AddMinutes(graceMinutes);
+    }
+
+    private static RateBlock SelectBlock(
+        PricingRules rules, VehicleType vehicleType, DateTimeOffset entryTime, string timezone)
+    {
+        var localEntry = ToLocal(entryTime, timezone);
+        var isWeekend = localEntry.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+        var isHoliday = rules.Holidays.Contains(localEntry.ToString("yyyy-MM-dd"));
+
+        if (isHoliday && rules.Holiday is not null) return rules.Holiday;
+        if (isWeekend && rules.Weekend is not null) return rules.Weekend;
+        if (rules.VehicleRates.TryGetValue(vehicleType.ToString(), out var vehicleBlock)) return vehicleBlock;
+        return rules.Default;
+    }
+
+    private static DateTime ToLocal(DateTimeOffset value, string timezone)
+    {
+        try
+        {
+            var tz = TimeZoneInfo.FindSystemTimeZoneById(timezone);
+            return TimeZoneInfo.ConvertTime(value, tz).DateTime;
+        }
+        catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException)
+        {
+            return value.UtcDateTime;
+        }
     }
 }

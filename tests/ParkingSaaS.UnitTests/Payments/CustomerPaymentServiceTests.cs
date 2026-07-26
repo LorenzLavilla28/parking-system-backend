@@ -28,6 +28,7 @@ public sealed class CustomerPaymentServiceTests
     private readonly TestClock _clock = new(new DateTimeOffset(2026, 6, 24, 18, 0, 0, TimeSpan.Zero));
     private readonly ParkingTokenService _tokens = new(new EphemeralDataProtectionProvider());
     private readonly FakePaymentGateway _gateway = new();
+    private readonly FakePayMongoCredentialsResolver _payMongoCredentials = new();
     private readonly FakeSessionRealtimeNotifier _realtime = new();
     private readonly AppDbContext _db;
     private readonly CustomerPaymentService _service;
@@ -38,7 +39,8 @@ public sealed class CustomerPaymentServiceTests
         _tenant.ScopeTo(_tenantId);
         _db = InMemoryDb.Create(_tenant);
         _service = new CustomerPaymentService(
-            _db, _gateway, new PaymentSettler(_db, TestEmail.Queue(_db), new FakeSessionPricingService()), _tokens, _clock, _realtime,
+            _db, _gateway, new PaymentSettler(_db, TestEmail.Queue(_db), new FakeSessionPricingService()), _tokens,
+            _payMongoCredentials, _clock, _realtime,
             Options.Create(new PublicUrlOptions { BaseUrl = "http://test.local" }),
             NullLogger<CustomerPaymentService>.Instance);
     }
@@ -76,6 +78,20 @@ public sealed class CustomerPaymentServiceTests
 
         // Amount sent to the gateway came from the quote, not the client.
         _gateway.LastCreateRequest!.Amount.Should().Be(90m);
+    }
+
+    [Fact]
+    public async Task Create_checkout_requires_tenant_paymongo_credentials()
+    {
+        var quote = SeedQuote(90m, _clock.UtcNow.AddMinutes(10));
+        _payMongoCredentials.Result = null;
+
+        var act = () => _service.CreateCheckoutAsync(
+            new StartCheckoutRequest(quote.Id, null), CancellationToken.None);
+
+        await act.Should().ThrowAsync<ConflictException>()
+            .WithMessage("Online PayMongo payments are not configured for this tenant. Please pay at the parking attendant.");
+        _gateway.CreateCalls.Should().Be(0);
     }
 
     [Fact]

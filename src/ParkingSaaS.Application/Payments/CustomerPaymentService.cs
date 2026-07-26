@@ -29,6 +29,7 @@ public sealed class CustomerPaymentService : ICustomerPaymentService
     private readonly IPaymentGateway _gateway;
     private readonly IPaymentSettler _settler;
     private readonly IParkingTokenService _tokens;
+    private readonly IPayMongoCredentialsResolver _payMongoCredentials;
     private readonly IDateTime _clock;
     private readonly ISessionRealtimeNotifier _realtime;
     private readonly IAuditLogger? _audit;
@@ -40,6 +41,7 @@ public sealed class CustomerPaymentService : ICustomerPaymentService
         IPaymentGateway gateway,
         IPaymentSettler settler,
         IParkingTokenService tokens,
+        IPayMongoCredentialsResolver payMongoCredentials,
         IDateTime clock,
         ISessionRealtimeNotifier realtime,
         IOptions<PublicUrlOptions> urls,
@@ -50,6 +52,7 @@ public sealed class CustomerPaymentService : ICustomerPaymentService
         _gateway = gateway;
         _settler = settler;
         _tokens = tokens;
+        _payMongoCredentials = payMongoCredentials;
         _clock = clock;
         _realtime = realtime;
         _urls = urls.Value;
@@ -74,6 +77,10 @@ public sealed class CustomerPaymentService : ICustomerPaymentService
             throw new ConflictException("This fee quote has expired. Please refresh the fee and try again.");
         if (quote.TotalAmount <= 0m)
             throw new ConflictException("No payment is required for this session.");
+
+        if (await _payMongoCredentials.ResolveAsync(quote.TenantId, ct) is null)
+            throw new ConflictException(
+                "Online PayMongo payments are not configured for this tenant. Please pay at the parking attendant.");
 
         var session = await _db.ParkingSessions
             .IgnoreQueryFilters()
@@ -105,7 +112,7 @@ public sealed class CustomerPaymentService : ICustomerPaymentService
             _tokens.Hash(reference), _tokens.Protect(reference), idempotencyKey,
             customerEmail: request.Email);
 
-        var checkout = await _gateway.CreateCheckoutAsync(new CreateCheckoutRequest(
+        var checkout = await _gateway.CreateCheckoutAsync(payment.TenantId, new CreateCheckoutRequest(
             Currency: quote.Currency,
             Amount: quote.TotalAmount,
             Description: $"Parking payment ({session.PlateNumberRaw})",
@@ -117,6 +124,7 @@ public sealed class CustomerPaymentService : ICustomerPaymentService
             CustomerEmail: request.Email), ct);
 
         payment.SetCheckoutSession(checkout.ProviderCheckoutId, checkout.CheckoutUrl);
+        payment.SetProviderAccountId(checkout.ProviderAccountId);
         session.MarkPaymentPending();
 
         await _db.Payments.AddAsync(payment, ct);
@@ -203,7 +211,7 @@ public sealed class CustomerPaymentService : ICustomerPaymentService
             PaymentStatusResult providerStatus;
             try
             {
-                providerStatus = await _gateway.GetPaymentStatusAsync(checkoutId, ct);
+                providerStatus = await _gateway.GetPaymentStatusAsync(prior.TenantId, checkoutId, ct);
             }
             catch (Exception ex)
             {
@@ -222,7 +230,7 @@ public sealed class CustomerPaymentService : ICustomerPaymentService
             }
 
             // Genuinely unpaid → safe to release the old checkout before starting a new one.
-            try { await _gateway.ExpireCheckoutAsync(checkoutId, ct); }
+            try { await _gateway.ExpireCheckoutAsync(prior.TenantId, checkoutId, ct); }
             catch (Exception ex) { _logger.LogWarning(ex, "Failed to expire superseded checkout {CheckoutId}.", checkoutId); }
             prior.Cancel();
         }
@@ -237,7 +245,7 @@ public sealed class CustomerPaymentService : ICustomerPaymentService
         PaymentStatusResult status;
         try
         {
-            status = await _gateway.GetPaymentStatusAsync(checkoutId, ct);
+            status = await _gateway.GetPaymentStatusAsync(payment.TenantId, checkoutId, ct);
         }
         catch (Exception ex)
         {

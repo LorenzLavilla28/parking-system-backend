@@ -42,6 +42,8 @@ public class WebhookEvent : AggregateRoot
 
     public void LinkPayment(Guid paymentId) => PaymentId = paymentId;
 
+    public void AssignTenant(Guid tenantId) => TenantId = tenantId;
+
     public void MarkIgnored(DateTimeOffset at, string reason)
     {
         ProcessingStatus = WebhookProcessingStatus.Ignored;

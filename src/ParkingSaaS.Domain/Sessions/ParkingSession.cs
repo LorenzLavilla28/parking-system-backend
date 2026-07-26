@@ -125,7 +125,16 @@ public class ParkingSession : AuditableEntity, ITenantOwned
         Status = ParkingSessionStatus.PaidExitWindow;
     }
 
-    /// <summary>Transitions a paid session to overstay once its exit deadline has passed.</summary>
+    /// <summary>Repairs the deadline for an existing paid session without changing payment history.</summary>
+    public void CorrectPaidExitDeadline(DateTimeOffset paidExitDeadline)
+    {
+        if (Status is not (ParkingSessionStatus.PaidExitWindow or ParkingSessionStatus.OverstayDue))
+            throw new DomainException("session.not_paid", "Only a paid session can have its exit deadline corrected.");
+
+        PaidExitDeadline = paidExitDeadline;
+    }
+
+    /// <summary>Transitions a paid session to overstay when its exit deadline has passed and a balance is due.</summary>
     public void MarkOverstay()
     {
         if (Status == ParkingSessionStatus.PaidExitWindow)
@@ -134,21 +143,36 @@ public class ParkingSession : AuditableEntity, ITenantOwned
 
     /// <summary>
     /// Applies the time-based lifecycle transition without changing any fee data.
-    /// Callers may safely invoke this repeatedly.
+    /// An expired exit window alone is not enough to make a session overdue: the
+    /// recalculated fee must exceed the amount already paid. Callers may safely
+    /// invoke this repeatedly.
     /// </summary>
-    public void RefreshTimeBasedStatus(DateTimeOffset now)
+    public void RefreshTimeBasedStatus(DateTimeOffset now, decimal calculatedFee)
     {
-        if (Status == ParkingSessionStatus.PaidExitWindow &&
-            PaidExitDeadline is { } deadline && deadline <= now)
-            MarkOverstay();
+        if (Status is not (ParkingSessionStatus.PaidExitWindow or ParkingSessionStatus.OverstayDue) ||
+            PaidExitDeadline is not { } deadline)
+            return;
+
+        if (deadline > now)
+        {
+            if (Status == ParkingSessionStatus.OverstayDue)
+                Status = ParkingSessionStatus.PaidExitWindow;
+            return;
+        }
+
+        Status = Outstanding(calculatedFee) > 0m
+            ? ParkingSessionStatus.OverstayDue
+            : ParkingSessionStatus.PaidExitWindow;
     }
 
     /// <summary>Returns the state that should be shown at the supplied instant.</summary>
-    public ParkingSessionStatus EffectiveStatus(DateTimeOffset now)
+    public ParkingSessionStatus EffectiveStatus(DateTimeOffset now, decimal calculatedFee)
     {
-        if (Status == ParkingSessionStatus.PaidExitWindow &&
+        if (Status is (ParkingSessionStatus.PaidExitWindow or ParkingSessionStatus.OverstayDue) &&
             PaidExitDeadline is { } deadline && deadline <= now)
-            return ParkingSessionStatus.OverstayDue;
+            return Outstanding(calculatedFee) > 0m
+                ? ParkingSessionStatus.OverstayDue
+                : ParkingSessionStatus.PaidExitWindow;
 
         return Status;
     }

@@ -51,7 +51,7 @@ public sealed class GuardExitService : IGuardExitService
         var outstanding = session.Outstanding(calculated);
         var effectiveFee = session.EffectiveFee(calculated);
 
-        var effectiveStatus = session.EffectiveStatus(now);
+        var effectiveStatus = session.EffectiveStatus(now, calculated);
         var (decision, canExit) = Decide(effectiveStatus, outstanding, session.TotalPaid);
 
         return new ExitStatusResponse(
@@ -66,18 +66,17 @@ public sealed class GuardExitService : IGuardExitService
         await GuardLocationAccess.EnsureCanOperateAsync(_db, _user, session.ParkingLocationId, ct);
 
         var now = _clock.UtcNow;
-        session.RefreshTimeBasedStatus(now);
+        var (_, calculated) = await CalculateAsync(session, now, ct);
+        session.RefreshTimeBasedStatus(now, calculated);
         if (!session.Status.IsActive())
             throw new ConflictException("This session is already closed.");
 
-        var (_, calculated) = await CalculateAsync(session, now, ct);
         var outstanding = session.Outstanding(calculated);
         var finalFee = session.EffectiveFee(calculated);
-        var effectiveStatus = session.EffectiveStatus(now);
+        var effectiveStatus = session.EffectiveStatus(now, calculated);
 
-        // Once the paid exit window has expired, the session requires a new
-        // payment before it can be released. This remains true even when the
-        // current calculated fee happens to equal the amount already paid.
+        // Once the paid exit window has expired and the recalculated fee exceeds
+        // the amount already paid, the session requires a new payment.
         if (effectiveStatus == ParkingSessionStatus.OverstayDue)
             throw new ConflictException("This session is overdue. The outstanding balance must be paid before exit.");
 

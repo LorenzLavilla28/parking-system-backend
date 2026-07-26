@@ -132,15 +132,11 @@ public sealed class OperationsSummaryService : IOperationsSummaryService
         var currentOverstays = 0;
         foreach (var session in overstayCandidates)
         {
-            if (session.EffectiveStatus(end) != ParkingSessionStatus.OverstayDue)
+            var calculation = await _pricing.CalculateAsync(session, end, discount: null, ct);
+            if (calculation is null || session.EffectiveStatus(end, calculation.TotalAmount) != ParkingSessionStatus.OverstayDue)
                 continue;
 
-            var calculation = await _pricing.CalculateAsync(session, end, discount: null, ct);
-            // A payment can settle an overstay without the lifecycle status being
-            // refreshed before this report runs. Recalculate the live balance so
-            // fully paid sessions are not reported as requiring attention.
-            if (calculation is null || session.Outstanding(calculation.TotalAmount) > 0m)
-                currentOverstays++;
+            currentOverstays++;
         }
 
         var payments = await _db.Payments.IgnoreQueryFilters()

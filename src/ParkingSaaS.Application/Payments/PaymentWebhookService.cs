@@ -42,9 +42,32 @@ public sealed class PaymentWebhookService : IPaymentWebhookService
         _logger = logger;
     }
 
-    public async Task<WebhookOutcome> ProcessPayMongoAsync(string rawPayload, string signatureHeader, CancellationToken ct)
+    public Task<WebhookOutcome> ProcessPayMongoAsync(string rawPayload, string signatureHeader, CancellationToken ct)
+        => ProcessPayMongoAsync(rawPayload, signatureHeader, null, ct);
+
+    public async Task<WebhookOutcome> ProcessPayMongoAsync(
+        string rawPayload,
+        string signatureHeader,
+        string? webhookToken,
+        CancellationToken ct)
     {
-        var verification = await _gateway.VerifyWebhookAsync(rawPayload, signatureHeader, ct);
+        Guid? tenantId = null;
+        if (!string.IsNullOrWhiteSpace(webhookToken))
+        {
+            var tokenHash = _hasher.Hash(webhookToken);
+            tenantId = await _db.TenantPayMongoConnections
+                .IgnoreQueryFilters()
+                .Where(c => c.WebhookTokenHash == tokenHash)
+                .Select(c => (Guid?)c.TenantId)
+                .FirstOrDefaultAsync(ct);
+
+            if (tenantId is null)
+                return WebhookOutcome.InvalidSignature;
+        }
+
+        var verification = tenantId is { } scopedTenant
+            ? await _gateway.VerifyWebhookAsync(scopedTenant, rawPayload, signatureHeader, ct)
+            : await _gateway.VerifyWebhookAsync(rawPayload, signatureHeader, ct);
         if (!verification.IsValid)
         {
             _logger.LogWarning("Rejected PayMongo webhook: invalid signature.");
@@ -71,6 +94,8 @@ public sealed class PaymentWebhookService : IPaymentWebhookService
         var webhookEvent = new WebhookEvent(
             PaymentProvider.PayMongo, verification.EventId!, verification.EventType ?? "unknown",
             _hasher.Hash(rawPayload), now);
+        if (tenantId is { } resolvedTenantId)
+            webhookEvent.AssignTenant(resolvedTenantId);
         await _db.WebhookEvents.AddAsync(webhookEvent, ct);
 
         var (outcome, settlement) = await ApplyAsync(verification, webhookEvent, now, ct);
@@ -119,6 +144,12 @@ public sealed class PaymentWebhookService : IPaymentWebhookService
         if (payment is null)
         {
             webhookEvent.MarkIgnored(now, "No matching payment for checkout.");
+            return (WebhookOutcome.Ignored, null);
+        }
+
+        if (webhookEvent.TenantId is { } webhookTenantId && payment.TenantId != webhookTenantId)
+        {
+            webhookEvent.MarkIgnored(now, "Payment belongs to a different tenant.");
             return (WebhookOutcome.Ignored, null);
         }
 

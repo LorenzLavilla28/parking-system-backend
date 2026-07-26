@@ -13,7 +13,9 @@ public sealed record CurrentFeeResponse(
     decimal Outstanding,
     DateTimeOffset EntryTime,
     DateTimeOffset CalculationTime,
-    IReadOnlyList<FeeBreakdownItem> Breakdown);
+    IReadOnlyList<FeeBreakdownItem> Breakdown,
+    bool OnlinePaymentAvailable = false,
+    bool CashPaymentAvailable = false);
 
 public sealed record CreateFeeQuoteRequest(string PublicToken);
 

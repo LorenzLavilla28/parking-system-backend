@@ -21,11 +21,13 @@ public sealed record PlateLookupResponse(
     bool CaptchaRequired);
 
 /// <summary>
-/// Public, masked view of a session for the payment page. Deliberately excludes
-/// customer identity, history, guard details, and internal identifiers.
+/// Public view of a session for the payment page. The token itself is the access
+/// control; customer identity, history, guard details, and internal identifiers
+/// remain excluded.
 /// </summary>
 public sealed record PublicSessionResponse(
-    string MaskedPlate,
+    string PlateNumber,
+    string VehicleType,
     string LocationName,
     DateTimeOffset EntryTime,
     string Status,

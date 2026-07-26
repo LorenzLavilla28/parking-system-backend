@@ -1,4 +1,6 @@
 using System.IO;
+using Amazon;
+using Amazon.SecretsManager;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -30,6 +32,7 @@ public static class DependencyInjection
         services.AddOptions<LookupThrottleOptions>().Bind(configuration.GetSection(LookupThrottleOptions.SectionName));
         services.AddOptions<PricingOptions>().Bind(configuration.GetSection(PricingOptions.SectionName));
         services.AddOptions<PayMongoOptions>().Bind(configuration.GetSection(PayMongoOptions.SectionName));
+        services.AddOptions<AwsSecretsOptions>().Bind(configuration.GetSection(AwsSecretsOptions.SectionName));
         services.AddOptions<EmailOptions>()
             .Bind(configuration.GetSection(EmailOptions.SectionName))
             .Validate(o => !o.Enabled ||
@@ -90,6 +93,14 @@ public static class DependencyInjection
         services.AddSingleton<IQrCodeGenerator, QrCodeGenerator>();
         services.AddSingleton<ILookupThrottle, MemoryLookupThrottle>();
         services.AddScoped<ICaptchaVerifier, NoCaptchaVerifier>();
+
+        services.AddSingleton<IAmazonSecretsManager>(sp =>
+        {
+            var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<AwsSecretsOptions>>().Value;
+            return new AmazonSecretsManagerClient(RegionEndpoint.GetBySystemName(options.Region));
+        });
+        services.AddSingleton<IPayMongoCredentialStore, AwsPayMongoCredentialStore>();
+        services.AddHttpClient<IPayMongoCredentialValidator, PayMongoCredentialValidator>();
 
         // PayMongo gateway (typed HttpClient) + background reconciliation.
         services.AddHttpClient<IPaymentGateway, PayMongoPaymentGateway>();

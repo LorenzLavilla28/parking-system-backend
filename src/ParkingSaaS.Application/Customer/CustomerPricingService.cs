@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Application.Common.Options;
+using ParkingSaaS.Application.Payments;
 using ParkingSaaS.Application.Pricing;
 using ParkingSaaS.Contracts.Customer;
 using ParkingSaaS.Domain.Pricing;
@@ -21,6 +22,7 @@ public sealed class CustomerPricingService : ICustomerPricingService
     private readonly IApplicationDbContext _db;
     private readonly IParkingTokenService _tokens;
     private readonly ISessionPricingService _pricing;
+    private readonly IPayMongoCredentialsResolver _payMongoCredentials;
     private readonly IDateTime _clock;
     private readonly PricingOptions _options;
     private readonly ILogger<CustomerPricingService> _logger;
@@ -29,6 +31,7 @@ public sealed class CustomerPricingService : ICustomerPricingService
         IApplicationDbContext db,
         IParkingTokenService tokens,
         ISessionPricingService pricing,
+        IPayMongoCredentialsResolver payMongoCredentials,
         IDateTime clock,
         IOptions<PricingOptions> options,
         ILogger<CustomerPricingService> logger)
@@ -36,6 +39,7 @@ public sealed class CustomerPricingService : ICustomerPricingService
         _db = db;
         _tokens = tokens;
         _pricing = pricing;
+        _payMongoCredentials = payMongoCredentials;
         _clock = clock;
         _options = options.Value;
         _logger = logger;
@@ -46,12 +50,14 @@ public sealed class CustomerPricingService : ICustomerPricingService
         var session = await ResolveSessionAsync(publicToken, ct);
         var now = _clock.UtcNow;
         var result = await _pricing.CalculateAsync(session, now, discount: null, ct);
+        var paymentAvailability = await GetPaymentAvailabilityAsync(session, ct);
 
         if (result is null)
         {
             return new CurrentFeeResponse(
                 PricingAvailable: false, "PHP", 0m, 0m, 0m, 0m, 0m,
-                session.EntryTime, now, Array.Empty<FeeBreakdownItem>());
+                session.EntryTime, now, Array.Empty<FeeBreakdownItem>(),
+                paymentAvailability.Online, paymentAvailability.Cash);
         }
 
         return new CurrentFeeResponse(
@@ -64,21 +70,24 @@ public sealed class CustomerPricingService : ICustomerPricingService
             session.Outstanding(result.TotalAmount),
             result.EntryTime,
             result.CalculationTime,
-            result.Breakdown.ToContract());
+            result.Breakdown.ToContract(),
+            paymentAvailability.Online,
+            paymentAvailability.Cash);
     }
 
     public async Task<FeeQuoteResponse> CreateQuoteAsync(CreateFeeQuoteRequest request, CancellationToken ct)
     {
         var session = await ResolveSessionAsync(request.PublicToken, ct);
         var now = _clock.UtcNow;
-        session.RefreshTimeBasedStatus(now);
-
-        if (!session.Status.IsActive())
-            throw new ConflictException("This parking session is not awaiting payment.");
+        
 
         // Recalculate at quote time — the displayed amount is never trusted.
         var result = await _pricing.CalculateAsync(session, now, discount: null, ct)
             ?? throw new ConflictException("Pricing is not available for this session.");
+        session.RefreshTimeBasedStatus(now, result.TotalAmount);
+
+        if (!session.Status.IsActive())
+            throw new ConflictException("This parking session is not awaiting payment.");
 
         // Charge only the outstanding balance (handles overstay top-ups and fee
         // overrides). Earlier successful payments are preserved.
@@ -124,5 +133,18 @@ public sealed class CustomerPricingService : ICustomerPricingService
             .IgnoreQueryFilters()
             .FirstOrDefaultAsync(s => s.PublicTokenHash == hash, ct)
             ?? throw new NotFoundException("Session not found.");
+    }
+
+    private async Task<(bool Online, bool Cash)> GetPaymentAvailabilityAsync(
+        ParkingSession session, CancellationToken ct)
+    {
+        var online = await _payMongoCredentials.ResolveAsync(session.TenantId, ct) is not null;
+        var cash = await _db.ParkingLocations
+            .IgnoreQueryFilters()
+            .Where(l => l.Id == session.ParkingLocationId)
+            .Select(l => l.AllowCashPayment)
+            .FirstOrDefaultAsync(ct);
+
+        return (online, cash);
     }
 }

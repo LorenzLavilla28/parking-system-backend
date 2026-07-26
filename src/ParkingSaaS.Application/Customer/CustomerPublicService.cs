@@ -14,8 +14,8 @@ namespace ParkingSaaS.Application.Customer;
 /// Public, unauthenticated customer surface. Because there is no tenant in
 /// context for these requests, queries deliberately bypass the global tenant
 /// filter and scope explicitly by the slug-resolved location or the token hash.
-/// Responses are masked and generic so a person who merely knows a plate cannot
-/// learn identity, history, or operational detail — only enough to pay.
+/// Responses are intentionally minimal so a person who merely knows a plate cannot
+/// learn identity, history, or operational detail — only enough to verify and pay.
 /// </summary>
 public sealed class CustomerPublicService : ICustomerPublicService
 {
@@ -152,19 +152,21 @@ public sealed class CustomerPublicService : ICustomerPublicService
             .FirstAsync(l => l.Id == session.ParkingLocationId, ct);
 
         var now = _clock.UtcNow;
-        var effectiveStatus = session.EffectiveStatus(now);
 
         // Show the live fee only while the session is still open; a closed/exited
         // session reports no current fee.
         decimal? currentFee = null;
-        if (effectiveStatus.IsActive())
+        if (session.Status.IsActive())
         {
             var fee = await _pricing.CalculateAsync(session, now, discount: null, ct);
             currentFee = fee?.TotalAmount;
         }
 
+        var effectiveStatus = session.EffectiveStatus(now, currentFee ?? 0m);
+
         return new PublicSessionResponse(
-            PlateMasker.Mask(session.PlateNumberRaw),
+            session.PlateNumberRaw,
+            session.VehicleType.ToString(),
             location.Name,
             session.EntryTime,
             effectiveStatus.ToString(),

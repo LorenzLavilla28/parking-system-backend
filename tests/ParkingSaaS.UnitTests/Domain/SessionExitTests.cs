@@ -52,11 +52,24 @@ public sealed class SessionExitTests
         var session = New();
         session.RegisterPayment(70m, now.AddMinutes(-1));
 
-        session.EffectiveStatus(now).Should().Be(ParkingSessionStatus.OverstayDue);
+        session.EffectiveStatus(now, calculatedFee: 90m).Should().Be(ParkingSessionStatus.OverstayDue);
         session.Status.Should().Be(ParkingSessionStatus.PaidExitWindow);
 
-        session.RefreshTimeBasedStatus(now);
+        session.RefreshTimeBasedStatus(now, calculatedFee: 90m);
         session.Status.Should().Be(ParkingSessionStatus.OverstayDue);
+    }
+
+    [Fact]
+    public void Expired_exit_window_is_not_overstay_when_paid_amount_covers_the_fee()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var session = New();
+        session.RegisterPayment(90m, now.AddMinutes(-1));
+
+        session.EffectiveStatus(now, calculatedFee: 90m).Should().Be(ParkingSessionStatus.PaidExitWindow);
+
+        session.RefreshTimeBasedStatus(now, calculatedFee: 90m);
+        session.Status.Should().Be(ParkingSessionStatus.PaidExitWindow);
     }
 
     [Fact]

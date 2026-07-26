@@ -52,15 +52,15 @@ public sealed class GuardCashPaymentService : IGuardCashPaymentService
         await GuardLocationAccess.EnsureCanOperateAsync(_db, _user, session.ParkingLocationId, ct);
 
         var now = _clock.UtcNow;
-        session.RefreshTimeBasedStatus(now);
-        if (!session.Status.IsActive())
-            throw new ConflictException("This session is already closed.");
-
         var location = await _db.ParkingLocations.FirstAsync(l => l.Id == session.ParkingLocationId, ct);
         if (!location.AllowCashPayment)
             throw new ForbiddenException("Cash payments are disabled for this location.");
 
         var result = await _pricing.CalculateAsync(session, now, discount: null, ct);
+        session.RefreshTimeBasedStatus(now, result?.TotalAmount ?? 0m);
+        if (!session.Status.IsActive())
+            throw new ConflictException("This session is already closed.");
+
         var currency = result?.Currency ?? "PHP";
         var amountDue = session.Outstanding(result?.TotalAmount ?? 0m);
 
@@ -77,8 +77,8 @@ public sealed class GuardCashPaymentService : IGuardCashPaymentService
             session.TenantId, session.Id, feeQuoteId: null, currency, amountDue,
             _tokens.Hash(reference), _tokens.Protect(reference), now, receiptNumber, _user.UserId ?? Guid.Empty);
 
-        var graceMinutes = await _pricing.GetPaidExitGraceMinutesAsync(session, ct);
-        session.RegisterPayment(amountDue, now.AddMinutes(graceMinutes));
+        var deadline = await _pricing.GetPaidExitDeadlineAsync(session, now, ct);
+        session.RegisterPayment(amountDue, deadline);
 
         await _db.Payments.AddAsync(payment, ct);
         await _audit.AddAsync(
