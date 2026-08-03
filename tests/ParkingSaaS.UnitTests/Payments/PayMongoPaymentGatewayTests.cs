@@ -47,7 +47,7 @@ public sealed class PayMongoPaymentGatewayTests
     [Fact]
     public async Task Checkout_offers_gcash_and_qrph_by_default()
     {
-        var (gateway, handler) = Build(new PayMongoOptions { SecretKey = "sk_test_x" });
+        var (gateway, handler) = Build(new PayMongoOptions());
 
         await gateway.CreateCheckoutAsync(Request, CancellationToken.None);
 
@@ -60,7 +60,6 @@ public sealed class PayMongoPaymentGatewayTests
     {
         var (gateway, handler) = Build(new PayMongoOptions
         {
-            SecretKey = "sk_test_x",
             PaymentMethodTypes = ["gcash", "qrph"]
         });
 
@@ -74,7 +73,6 @@ public sealed class PayMongoPaymentGatewayTests
     {
         var (gateway, handler) = Build(new PayMongoOptions
         {
-            SecretKey = "sk_test_x",
             PaymentMethodTypes = []
         });
 
@@ -93,19 +91,15 @@ public sealed class PayMongoPaymentGatewayTests
 
     private sealed class StaticCredentialsResolver : IPayMongoCredentialsResolver
     {
-        private readonly PayMongoOptions _options;
-
-        public StaticCredentialsResolver(PayMongoOptions options) => _options = options;
+        public StaticCredentialsResolver(PayMongoOptions options) { }
 
         public Task<ResolvedPayMongoCredentials?> ResolveAsync(
             Guid? tenantId,
             CancellationToken cancellationToken)
             => Task.FromResult<ResolvedPayMongoCredentials?>(
-                string.IsNullOrWhiteSpace(_options.SecretKey)
-                    ? null
-                    : new(_options.SecretKey, _options.WebhookSecret, true));
+                new("sk_live_x", "whsec_live_x"));
 
-        public void Invalidate(Guid tenantId, string environment) { }
+        public void Invalidate(Guid tenantId) { }
     }
 
     private sealed class CapturingHandler : HttpMessageHandler

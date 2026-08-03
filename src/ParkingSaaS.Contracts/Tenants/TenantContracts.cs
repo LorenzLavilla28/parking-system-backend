@@ -9,7 +9,8 @@ public sealed record CreateTenantRequest(
     string AdminFirstName,
     string AdminLastName,
     string AdminEmail,
-    string AdminPassword);
+    string AdminPassword,
+    int? PurchasedSlotCapacityPerLocation = null);
 
 public sealed record UpdateTenantStatusRequest(string Status, string? Reason = null);
 
@@ -28,6 +29,9 @@ public sealed record TenantResponse(
     int? MaximumLocations,
     int? MaximumSlotsPerLocation,
     decimal? MonthlyPrice,
+    decimal? PricePerSlot,
+    int? PurchasedSlotCapacityPerLocation,
+    bool CapacityPricingEnabled,
     int AdditionalSlotCapacity,
     int? EffectiveMaximumSlotsPerLocation,
     int ActiveLocationCount,

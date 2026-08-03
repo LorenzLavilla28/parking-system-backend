@@ -53,7 +53,19 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
         if (plan == SubscriptionPlan.Free)
             throw new ConflictException("The Free plan is no longer available for new onboarding.");
 
+        var limits = SubscriptionPlanRules.For(plan);
+        var purchasedCapacity = request.PurchasedSlotCapacityPerLocation ?? limits.MaximumSlotsPerLocation;
+        if (purchasedCapacity is { } selectedCapacity)
+        {
+            if (selectedCapacity < 1)
+                throw new ConflictException("Purchased capacity must be at least 1 slot.");
+            if (limits.MaximumSlotsPerLocation is { } maximumSlots && selectedCapacity > maximumSlots)
+                throw new ConflictException($"{plan} supports up to {maximumSlots} slots per location before add-ons.");
+        }
+
         var tenant = new Tenant(request.Name, slug, plan, request.DefaultCurrency, request.DefaultTimezone);
+        tenant.SetPurchasedSlotCapacityPerLocation(purchasedCapacity);
+        tenant.SetCapacityPricingEnabled(plan != SubscriptionPlan.Custom);
         await _db.Tenants.AddAsync(tenant, ct);
 
         var admin = new ApplicationUser(
@@ -130,7 +142,11 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
 
         if (limits.MaximumSlotsPerLocation is { } maximumSlots)
         {
-            var effectiveMaximum = maximumSlots + tenant.AdditionalSlotCapacity;
+            var effectiveMaximum = SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(
+                plan,
+                tenant.AdditionalSlotCapacity,
+                tenant.PurchasedSlotCapacityPerLocation,
+                tenant.CapacityPricingEnabled) ?? maximumSlots;
             var oversized = activeLocations.FirstOrDefault(l => l.SlotCapacity > effectiveMaximum);
             if (oversized is not null)
                 throw new ConflictException($"plan_downgrade_blocked: {oversized.Name} uses {oversized.SlotCapacity} slots, above the new effective limit of {effectiveMaximum}.");
@@ -147,16 +163,26 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
             new
             {
                 subscriptionPlan = previousPlan.ToString(),
-                monthlyPrice = SubscriptionPlanRules.For(previousPlan).MonthlyPrice,
+                monthlyPrice = SubscriptionPlanRules.MonthlyPrice(
+                    previousPlan,
+                    tenant.PurchasedSlotCapacityPerLocation,
+                    tenant.AdditionalSlotCapacity,
+                    tenant.CapacityPricingEnabled),
             },
             new
             {
                 subscriptionPlan = plan.ToString(),
-                monthlyPrice = limits.MonthlyPrice,
+                monthlyPrice = SubscriptionPlanRules.MonthlyPrice(
+                    plan,
+                    tenant.PurchasedSlotCapacityPerLocation,
+                    tenant.AdditionalSlotCapacity,
+                    tenant.CapacityPricingEnabled),
                 effectiveDate = "Immediately",
                 proratedCharge = (decimal?)null,
                 existingAddons = "No change",
-                billingImpact = "Proration is handled by the billing system.",
+                billingImpact = tenant.CapacityPricingEnabled
+                    ? "Monthly price recalculated from purchased capacity; recurring collection is not configured in this workspace."
+                    : "Fixed legacy plan pricing retained; recurring collection is not configured in this workspace.",
             },
             request.Reason,
             ct);
@@ -173,32 +199,57 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
         if (string.IsNullOrWhiteSpace(request.Reason))
             throw new ConflictException("A reason is required before changing capacity.");
 
-        var baseMaximum = SubscriptionPlanRules.For(tenant.SubscriptionPlan).MaximumSlotsPerLocation;
-        if (baseMaximum is { } maximumSlots)
+        var plan = tenant.SubscriptionPlan;
+        var effectiveMaximum = SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(
+            plan,
+            request.AdditionalSlotCapacity,
+            tenant.PurchasedSlotCapacityPerLocation,
+            tenant.CapacityPricingEnabled);
+        if (effectiveMaximum is { } maximumSlots)
         {
             var largestActiveLocation = await _db.ParkingLocations
                 .Where(l => l.TenantId == id && l.Status == LocationStatus.Active)
                 .Select(l => (int?)l.SlotCapacity)
                 .MaxAsync(ct) ?? 0;
-            var requiredAdditionalCapacity = Math.Max(0, largestActiveLocation - maximumSlots);
-            if (request.AdditionalSlotCapacity < requiredAdditionalCapacity)
-                throw new ConflictException($"capacity_addon_reduction_blocked: at least {requiredAdditionalCapacity} additional slot(s) are needed by the current locations.");
+            if (largestActiveLocation > maximumSlots)
+                throw new ConflictException($"capacity_addon_reduction_blocked: the requested capacity supports {maximumSlots} slots, but the largest active location uses {largestActiveLocation}.");
         }
 
         var previousCapacity = tenant.AdditionalSlotCapacity;
         if (previousCapacity == request.AdditionalSlotCapacity)
             return ToResponse(tenant, await ActiveLocationCountAsync(id, ct));
 
+        var previousPrice = SubscriptionPlanRules.MonthlyPrice(
+            plan,
+            tenant.PurchasedSlotCapacityPerLocation,
+            previousCapacity,
+            tenant.CapacityPricingEnabled);
         tenant.SetAdditionalSlotCapacity(request.AdditionalSlotCapacity);
+        if (!tenant.CapacityPricingEnabled && SubscriptionPlanRules.For(plan).MaximumSlotsPerLocation is { } baseMaximum)
+        {
+            tenant.SetPurchasedSlotCapacityPerLocation(baseMaximum);
+            tenant.SetCapacityPricingEnabled(true);
+        }
+        var newPrice = SubscriptionPlanRules.MonthlyPrice(
+            plan,
+            tenant.PurchasedSlotCapacityPerLocation,
+            tenant.AdditionalSlotCapacity,
+            tenant.CapacityPricingEnabled);
         await AddAuditAsync(
             id,
             "tenant.capacity_addon_changed",
-            new { additionalSlotCapacity = previousCapacity },
+            new
+            {
+                additionalSlotCapacity = previousCapacity,
+                monthlyPrice = previousPrice,
+            },
             new
             {
                 additionalSlotCapacity = request.AdditionalSlotCapacity,
+                purchasedSlotCapacityPerLocation = tenant.PurchasedSlotCapacityPerLocation,
+                monthlyPrice = newPrice,
                 effectiveDate = "Immediately",
-                billingImpact = "Capacity add-on billing is not calculated in this workspace.",
+                billingImpact = "Monthly price recalculated from capacity; recurring collection is not configured in this workspace.",
             },
             request.Reason,
             ct);
@@ -318,9 +369,20 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
         t.DefaultTimezone,
         SubscriptionPlanRules.For(t.SubscriptionPlan).MaximumLocations,
         SubscriptionPlanRules.For(t.SubscriptionPlan).MaximumSlotsPerLocation,
-        SubscriptionPlanRules.For(t.SubscriptionPlan).MonthlyPrice,
+        SubscriptionPlanRules.MonthlyPrice(
+            t.SubscriptionPlan,
+            t.PurchasedSlotCapacityPerLocation,
+            t.AdditionalSlotCapacity,
+            t.CapacityPricingEnabled),
+        SubscriptionPlanRules.PricePerSlot(t.SubscriptionPlan),
+        t.PurchasedSlotCapacityPerLocation,
+        t.CapacityPricingEnabled,
         t.AdditionalSlotCapacity,
-        SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(t.SubscriptionPlan, t.AdditionalSlotCapacity),
+        SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(
+            t.SubscriptionPlan,
+            t.AdditionalSlotCapacity,
+            t.PurchasedSlotCapacityPerLocation,
+            t.CapacityPricingEnabled),
         activeLocationCount,
         t.CreatedAt,
         t.UpdatedAt);

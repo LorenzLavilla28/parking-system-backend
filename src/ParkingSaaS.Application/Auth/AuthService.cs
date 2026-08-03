@@ -235,6 +235,13 @@ public sealed class AuthService : IAuthService
     {
         var access = _jwt.CreateAccessToken(user);
 
+        var tenantName = await _db.Tenants
+            .IgnoreQueryFilters()
+            .Where(t => t.Id == user.TenantId)
+            .Select(t => t.Name)
+            .SingleOrDefaultAsync(ct)
+            ?? "Tenant workspace";
+
         var refreshValue = _refreshTokens.GenerateToken();
         var refreshExpiry = now.AddDays(_jwtOptions.RefreshTokenDays);
         var refresh = new RefreshToken(user.Id, user.TenantId, _refreshTokens.Hash(refreshValue), now, refreshExpiry, ipAddress);
@@ -243,6 +250,7 @@ public sealed class AuthService : IAuthService
         var dto = new AuthUserDto(
             user.Id,
             user.TenantId,
+            tenantName,
             user.Email,
             user.FullName,
             user.Roles.Select(r => RoleNames.ToName(r.Role)).ToArray(),

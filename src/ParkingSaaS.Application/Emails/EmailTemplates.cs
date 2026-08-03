@@ -13,6 +13,7 @@ namespace ParkingSaaS.Application.Emails;
 /// </summary>
 public static class EmailTemplates
 {
+    private const string ProductName = "PBP Parking";
     public static EmailMessage TenantOnboarding(
         Guid tenantId, string toEmail, string adminName, string tenantName, string tenantSlug,
         string temporaryPassword, string appBaseUrl, DateTimeOffset now, int maxAttempts)
@@ -20,18 +21,18 @@ public static class EmailTemplates
         var name = E(adminName);
         var org = E(tenantName);
         var loginUrl = $"{appBaseUrl.TrimEnd('/')}/login";
-        var subject = $"Welcome to ParkingSaaS — {tenantName} is ready";
+        var subject = $"Welcome to {ProductName} — {tenantName} is ready";
 
         var html = Wrap($"Welcome, {name}", $$"""
-            <p>Your ParkingSaaS workspace for <strong>{{org}}</strong> has been created and is ready to use.</p>
+            <p>Your {{ProductName}} workspace for <strong>{{org}}</strong> has been created and is ready to use.</p>
             <p>You're set up as the tenant administrator. Sign in to add locations, staff, and rate plans.</p>
             <p><strong>Temporary password:</strong> <code>{{E(temporaryPassword)}}</code></p>
             <p style="color:#b45309;font-size:13px">For your security, you must change this password the first time you sign in.</p>
-            <p style="margin:24px 0"><a href="{{E(loginUrl)}}" style="background:#0f172a;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block">Sign in to ParkingSaaS</a></p>
+            <p style="margin:24px 0"><a href="{{E(loginUrl)}}" style="background:#0f172a;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block">Sign in to {{ProductName}}</a></p>
             <p style="color:#64748b;font-size:13px">Workspace: {{E(tenantSlug)}}</p>
             """);
 
-        var text = $"Welcome, {adminName}\n\nYour ParkingSaaS workspace for {tenantName} is ready. " +
+        var text = $"Welcome, {adminName}\n\nYour {ProductName} workspace for {tenantName} is ready. " +
                    $"You're the tenant administrator. Sign in: {loginUrl}\nTemporary password: {temporaryPassword}\n" +
                    $"You must change this password the first time you sign in.\nWorkspace: {tenantSlug}";
 
@@ -112,7 +113,7 @@ public static class EmailTemplates
         var periodStart = FormatInTimeZone(summary.PeriodStart, summary.TimeZone);
         var periodEnd = FormatInTimeZone(summary.PeriodEnd, summary.TimeZone);
         var revenue = FormatMoney(summary.Revenue, summary.Currency);
-        var subject = $"ParkingSaaS operations summary — {summary.TenantName}";
+        var subject = $"{ProductName} operations summary — {summary.TenantName}";
         var breakdown = string.Join("", summary.PaymentBreakdown.Select(item =>
             Row(E(item.Label), $"{item.Count} / {E(FormatMoney(item.Amount, summary.Currency))}")));
         var attention = summary.Attention.Count == 0
@@ -138,7 +139,7 @@ public static class EmailTemplates
             <p style="color:#64748b;font-size:13px">Pending: {{E(FormatMoney(summary.PendingAmount, summary.Currency))}} · Failed/closed: {{E(FormatMoney(summary.FailedAmount, summary.Currency))}} · Failed webhooks: {{E(summary.FailedWebhooks.ToString(CultureInfo.InvariantCulture))}}</p>
             <h2 style="font-size:16px;margin:24px 0 8px">Attention required</h2>
             {{attention}}
-            <p style="margin:24px 0"><a href="{{E(d.DashboardUrl)}}" style="background:#0f172a;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block">Review in ParkingSaaS</a></p>
+            <p style="margin:24px 0"><a href="{{E(d.DashboardUrl)}}" style="background:#0f172a;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block">Review in {{ProductName}}</a></p>
             """);
 
         var text = new StringBuilder()
@@ -158,7 +159,7 @@ public static class EmailTemplates
                 ? "Attention required: none"
                 : "Attention required:\n" + string.Join("\n", summary.Attention.Select(a => $"- {a.Title}: {a.Detail}")))
             .AppendLine()
-            .AppendLine($"Review in ParkingSaaS: {d.DashboardUrl}")
+            .AppendLine($"Review in {ProductName}: {d.DashboardUrl}")
             .ToString();
 
         return EmailMessage.Create(EmailKind.OperationsSummary, toEmail, toName, subject, html, text, now, tenantId, maxAttempts);
@@ -172,17 +173,17 @@ public static class EmailTemplates
         var org = E(tenantName);
         var roleList = E(string.Join(", ", roles));
         var loginUrl = $"{appBaseUrl.TrimEnd('/')}/login";
-        var subject = $"Your ParkingSaaS account for {tenantName}";
+        var subject = $"Your {ProductName} account for {tenantName}";
 
         var html = Wrap($"Hello, {name}", $$"""
-            <p>An account has been created for you on <strong>{{org}}</strong>'s ParkingSaaS workspace.</p>
+            <p>An account has been created for you on <strong>{{org}}</strong>'s {{ProductName}} workspace.</p>
             <p>Your role(s): <strong>{{roleList}}</strong></p>
             <p><strong>Temporary password:</strong> <code>{{E(temporaryPassword)}}</code></p>
             <p style="color:#b45309;font-size:13px">You must change this password the first time you sign in.</p>
             <p style="margin:24px 0"><a href="{{E(loginUrl)}}" style="background:#0f172a;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block">Sign in</a></p>
             """);
 
-        var text = $"Hello, {userName}\n\nAn account was created for you on {tenantName}'s ParkingSaaS workspace. " +
+        var text = $"Hello, {userName}\n\nAn account was created for you on {tenantName}'s {ProductName} workspace. " +
                    $"Role(s): {string.Join(", ", roles)}.\nTemporary password: {temporaryPassword}\n" +
                    $"You must change this password the first time you sign in. Sign in: {loginUrl}";
 
@@ -194,16 +195,16 @@ public static class EmailTemplates
     {
         var name = E(userName);
         var safeUrl = E(resetUrl);
-        var subject = "Reset your ParkingSaaS password";
+        var subject = $"Reset your {ProductName} password";
 
         var html = Wrap("Reset your password", $$"""
             <p>Hello, {{name}}.</p>
-            <p>We received a request to reset your ParkingSaaS password. This link expires in one hour and can be used only once.</p>
+            <p>We received a request to reset your {{ProductName}} password. This link expires in one hour and can be used only once.</p>
             <p style="margin:24px 0"><a href="{{safeUrl}}" style="background:#0f172a;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block">Reset password</a></p>
             <p style="color:#64748b;font-size:13px">If you did not request this, you can safely ignore this email.</p>
             """);
 
-        var text = $"Hello, {userName}\n\nReset your ParkingSaaS password: {resetUrl}\n" +
+        var text = $"Hello, {userName}\n\nReset your {ProductName} password: {resetUrl}\n" +
                    "This link expires in one hour and can be used only once. If you did not request this, ignore this email.";
 
         return EmailMessage.Create(EmailKind.PasswordReset, toEmail, userName, subject, html, text, now, tenantId, maxAttempts);
@@ -217,7 +218,7 @@ public static class EmailTemplates
           <h1 style="font-size:20px;margin:0 0 12px">{{E(heading)}}</h1>
           {{body}}
           <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0"/>
-          <p style="color:#94a3b8;font-size:12px">ParkingSaaS — this is an automated message, please do not reply.</p>
+          <p style="color:#94a3b8;font-size:12px">{{ProductName}} — this is an automated message, please do not reply.</p>
         </div>
         """;
 

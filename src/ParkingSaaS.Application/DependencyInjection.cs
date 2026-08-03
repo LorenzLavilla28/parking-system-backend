@@ -28,6 +28,7 @@ public static class DependencyInjection
         services.AddScoped<ILocationService, LocationService>();
         services.AddScoped<IUserService, UserService>();
         services.AddScoped<ITenantProvisioningService, TenantProvisioningService>();
+        services.AddScoped<ITenantBrandingService, TenantBrandingService>();
 
         services.AddScoped<IGuardEntryService, GuardEntryService>();
         services.AddScoped<IGuardSessionService, GuardSessionService>();

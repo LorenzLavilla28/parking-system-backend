@@ -1,0 +1,72 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: parking-saas-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-parkingsaas}
+      POSTGRES_USER: ${POSTGRES_USER:-parking}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the production environment file}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api:
+    build:
+      context: ..
+      dockerfile: src/ParkingSaaS.Api/Dockerfile
+    container_name: parking-saas-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${POSTGRES_DB:-parkingsaas};Username=${POSTGRES_USER:-parking};Password=${POSTGRES_PASSWORD}
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:?Set JWT_SIGNING_KEY in the production environment file}
+      Database__ResetOnStartup: "false"
+      CloudFront__TrustForwardedProto: "true"
+      Cors__AllowedOrigins__0: https://pbp-parking.app
+      Cors__AllowedOrigins__1: https://www.pbp-parking.app
+      PublicUrls__BaseUrl: https://pbp-parking.app
+      DataProtection__KeyRingPath: /app/dp-keys
+      AWS_REGION: ap-southeast-1
+      AwsSecrets__Enabled: "true"
+      AwsSecrets__Region: ap-southeast-1
+      TenantBranding__BucketName: parking-system-tenant-assets
+      TenantBranding__Region: ap-southeast-1
+      TenantBranding__MaxLogoBytes: "2097152"
+      PayMongo__WebhookBaseUrl: https://pbp-parking.app
+      BootstrapAdmin__Enabled: ${BOOTSTRAP_ADMIN_ENABLED:-false}
+      BootstrapAdmin__FirstName: ${BOOTSTRAP_ADMIN_FIRST_NAME:-Platform}
+      BootstrapAdmin__LastName: ${BOOTSTRAP_ADMIN_LAST_NAME:-Administrator}
+      BootstrapAdmin__Email: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BootstrapAdmin__Password: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      Email__Enabled: ${EMAIL_ENABLED:-false}
+      Email__SecretName: ${EMAIL_SECRET_NAME:-parking-saas/production/email}
+      Email__FromAddress: ${EMAIL_FROM_ADDRESS:-no-reply@pbp-parking.app}
+      Email__FromName: ${EMAIL_FROM_NAME:-PBP Parking}
+      Email__AppBaseUrl: https://pbp-parking.app
+    ports:
+      - "80:8080"
+    volumes:
+      - data_protection_keys:/app/dp-keys
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+  data_protection_keys:

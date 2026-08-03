@@ -23,6 +23,5 @@ public interface IPayMongoCredentialValidator
 {
     Task<PayMongoCredentialValidationResult> ValidateAsync(
         string secretKey,
-        string environment,
         CancellationToken cancellationToken);
 }

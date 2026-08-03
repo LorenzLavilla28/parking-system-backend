@@ -27,6 +27,40 @@ public static class SubscriptionPlanRules
         return baseLimit is null ? null : baseLimit.Value + Math.Max(0, additionalSlotCapacity);
     }
 
+    public static int? EffectiveMaximumSlotsPerLocation(
+        SubscriptionPlan plan,
+        int additionalSlotCapacity,
+        int? purchasedSlotCapacityPerLocation,
+        bool capacityPricingEnabled)
+    {
+        if (capacityPricingEnabled && purchasedSlotCapacityPerLocation is { } purchasedCapacity)
+            return purchasedCapacity + Math.Max(0, additionalSlotCapacity);
+
+        return EffectiveMaximumSlotsPerLocation(plan, additionalSlotCapacity);
+    }
+
+    public static decimal? PricePerSlot(SubscriptionPlan plan)
+    {
+        var limits = For(plan);
+        return limits.MaximumSlotsPerLocation is { } slots && limits.MonthlyPrice is { } price
+            ? price / slots
+            : null;
+    }
+
+    public static decimal? MonthlyPrice(
+        SubscriptionPlan plan,
+        int? purchasedSlotCapacityPerLocation,
+        int additionalSlotCapacity,
+        bool capacityPricingEnabled)
+    {
+        var limits = For(plan);
+        if (!capacityPricingEnabled || purchasedSlotCapacityPerLocation is null || limits.MaximumSlotsPerLocation is null || limits.MonthlyPrice is null)
+            return limits.MonthlyPrice;
+
+        var totalCapacity = purchasedSlotCapacityPerLocation.Value + Math.Max(0, additionalSlotCapacity);
+        return decimal.Round(totalCapacity * limits.MonthlyPrice.Value / limits.MaximumSlotsPerLocation.Value, 2, MidpointRounding.AwayFromZero);
+    }
+
 }
 
 public sealed record SubscriptionPlanLimits(

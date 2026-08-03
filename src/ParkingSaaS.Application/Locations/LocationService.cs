@@ -42,9 +42,13 @@ public sealed class LocationService : ILocationService
                 throw new ConflictException("custom_plan_requires_platform_approval");
             if (activeLocationCount >= limits.MaximumLocations.Value)
                 throw new ConflictException($"location_limit_reached: {tenant.SubscriptionPlan} includes up to {limits.MaximumLocations.Value} active location(s).");
-            var effectiveMaximumSlots = SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(tenant.SubscriptionPlan, tenant.AdditionalSlotCapacity);
+            var effectiveMaximumSlots = SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(
+                tenant.SubscriptionPlan,
+                tenant.AdditionalSlotCapacity,
+                tenant.PurchasedSlotCapacityPerLocation,
+                tenant.CapacityPricingEnabled);
             if (effectiveMaximumSlots is { } maxSlots && request.SlotCapacity > maxSlots)
-                throw new ConflictException($"capacity_not_allowed: {tenant.SubscriptionPlan} allows up to {maxSlots} slots per location including {tenant.AdditionalSlotCapacity} add-on slot(s).");
+                throw new ConflictException($"capacity_not_allowed: {tenant.SubscriptionPlan} allows up to {maxSlots} slots per location including capacity add-ons.");
 
             var slug = request.Slug.Trim().ToLowerInvariant();
             var exists = await _db.ParkingLocations.AnyAsync(l => l.Slug == slug, txct);
@@ -68,9 +72,13 @@ public sealed class LocationService : ILocationService
         location.Rename(request.Name);
         var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == _tenant.TenantId, ct)
             ?? throw new NotFoundException("Tenant not found.");
-        var effectiveMaximumSlots = SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(tenant.SubscriptionPlan, tenant.AdditionalSlotCapacity);
+        var effectiveMaximumSlots = SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(
+            tenant.SubscriptionPlan,
+            tenant.AdditionalSlotCapacity,
+            tenant.PurchasedSlotCapacityPerLocation,
+            tenant.CapacityPricingEnabled);
         if (effectiveMaximumSlots is { } maxSlots && request.SlotCapacity > maxSlots)
-            throw new ConflictException($"capacity_not_allowed: {tenant.SubscriptionPlan} allows up to {maxSlots} slots per location including {tenant.AdditionalSlotCapacity} add-on slot(s).");
+            throw new ConflictException($"capacity_not_allowed: {tenant.SubscriptionPlan} allows up to {maxSlots} slots per location including capacity add-ons.");
         var activeOccupancy = await _db.ParkingSessions.CountAsync(s =>
             s.ParkingLocationId == location.Id &&
             (s.Status == ParkingSessionStatus.ActiveUnpaid ||
@@ -153,8 +161,14 @@ public sealed class LocationService : ILocationService
             limits.MaximumLocations,
             limits.MaximumSlotsPerLocation,
             canCreateLocation,
+            tenant.PurchasedSlotCapacityPerLocation,
+            tenant.CapacityPricingEnabled,
             tenant.AdditionalSlotCapacity,
-            SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(tenant.SubscriptionPlan, tenant.AdditionalSlotCapacity));
+            SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(
+                tenant.SubscriptionPlan,
+                tenant.AdditionalSlotCapacity,
+                tenant.PurchasedSlotCapacityPerLocation,
+                tenant.CapacityPricingEnabled));
     }
 
     public async Task ArchiveAsync(Guid id, CancellationToken ct)

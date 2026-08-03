@@ -148,7 +148,7 @@ PayMongo credentials are tenant-owned. There is no local or global PayMongo key
 fallback. If a tenant has not connected its own PayMongo account, the public payment
 page is cash-only and guards can record cash when cash is enabled for the location.
 
-To connect a tenant’s PayMongo test account from the local app, the API container needs
+To connect a tenant’s live PayMongo account from the local app, the API container needs
 AWS credentials. Add them only to the untracked `parking-system-backend/.env` file:
 
 ```dotenv
@@ -173,13 +173,15 @@ without printing secret values:
 docker compose -f deploy/docker-compose.yml exec api printenv AWS_REGION
 ```
 
-Then sign in as the tenant administrator, open Payment settings, enter that tenant’s
-PayMongo test credentials, and connect the account. The local active environment is
-`test`, and redirect URLs use `PUBLIC_BASE_URL` (default `http://localhost:5173`).
+Then sign in as the tenant administrator, open Payment settings, and connect that
+tenant’s live credentials. Only server-side keys beginning with `sk_live_` are accepted;
+test keys are rejected. Redirect URLs use `PUBLIC_BASE_URL` (default
+`http://localhost:5173`).
 
 PayMongo webhooks cannot normally reach localhost from the public internet. The payment
-flow also polls PayMongo status, but a full webhook test requires a public HTTPS URL or
-a tunnel. Do not use live credentials for ordinary local testing.
+flow also polls PayMongo status, but a full webhook verification requires a public HTTPS
+URL or a tunnel. Live credentials can create real charges, so do not initiate local
+checkout payments unless that is intentional.
 
 Credentials stored in the host `.aws` directory are not automatically visible inside a
 Docker container. For Compose, use the untracked `.env` variables above, or create a
@@ -188,23 +190,23 @@ local Compose override that mounts the host credentials file read-only into
 
 ## Email in Docker
 
-Email is disabled by default in the Compose environment. To enable Gmail SMTP, add the
-following to the backend `.env` and recreate the API container:
+Email is disabled by default in the Compose environment. Real delivery uses Microsoft
+Graph only. Add the Entra app-only credentials to the backend `.env`, then recreate the
+API container:
 
 ```dotenv
 EMAIL_ENABLED=true
-EMAIL_PROVIDER=Gmail
-EMAIL_HOST=smtp.gmail.com
-EMAIL_PORT=587
-EMAIL_USE_SSL=true
-EMAIL_USERNAME=you@example.com
-EMAIL_PASSWORD=your-gmail-app-password
-EMAIL_FROM_ADDRESS=you@example.com
-EMAIL_FROM_NAME=ParkingSaaS
+EMAIL_TENANT_ID=your-microsoft-entra-tenant-id
+EMAIL_CLIENT_ID=your-application-client-id
+EMAIL_CLIENT_SECRET=your-application-client-secret
+EMAIL_FROM_ADDRESS=noreply@your-domain.example
+EMAIL_FROM_NAME=PBP Parking
 EMAIL_APP_BASE_URL=http://localhost:5173
 ```
 
-Use a Gmail app password, not the normal account password:
+The Entra application needs Microsoft Graph `Mail.Send` application permission with
+admin consent. `EMAIL_FROM_ADDRESS` must identify a mailbox the application is allowed
+to send as.
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d --build api
@@ -249,26 +251,26 @@ Development secrets live in .NET user-secrets, not in the repo. They are keyed t
 `UserSecretsId` in `src/ParkingSaaS.Api/ParkingSaaS.Api.csproj` and stored under
 `%APPDATA%\Microsoft\UserSecrets\` on Windows.
 
-Outbound email is enabled in Development. Set `Email:Provider` to `Gmail` to use the
-configured Gmail SMTP credentials, or to `MicrosoftGraph` to use the Entra app-only
-credentials. Only the selected provider is used.
+Outbound email uses Microsoft Graph app-only authentication. Development values are read
+from the `Email` section in `appsettings.Development.json`; do not commit real client
+secrets to source control. For a longer-lived local setup, store the secret with .NET
+user-secrets:
 
 ```bash
 cd src/ParkingSaaS.Api
-dotnet user-secrets set "Email:Password" "<gmail app password>"
+dotnet user-secrets set "Email:ClientSecret" "<microsoft entra client secret>"
 dotnet user-secrets list          # verify
 ```
 
-The development file keeps both provider configurations available. To switch transports,
-change `Email:Provider` and set `Email:FromAddress` to an address owned by that provider.
-Gmail uses `Host`, `Port`, `UseSsl`, `Username`, and `Password`; Microsoft Graph uses
-`TenantId`, `ClientId`, and `ClientSecret`.
+Set `Email:TenantId`, `Email:ClientId`, and `Email:FromAddress` to the matching Entra
+tenant, application, and mailbox. Microsoft Graph is the only supported delivery
+transport.
 
 To skip email entirely instead, set `Email:Enabled` to `false` in
 `appsettings.Development.json`. Queued mail is then written to the log by
 `LoggingEmailSender` rather than sent.
 
-`Email:Enabled` is validated at startup: if the selected provider is incomplete, or
+`Email:Enabled` is validated at startup: if the Graph configuration is incomplete, or
 `Email:FromAddress` is empty, the app refuses to boot rather than silently dropping mail.
 
 ## Docker Compose reference
@@ -317,13 +319,14 @@ docker compose -f deploy/docker-compose.yml up --build
 ```
 
 The API is then on <http://localhost:5274>. User-secrets do not exist inside the container,
-so SMTP stays off unless you put the credentials in `.env` first:
+so Graph delivery stays off unless you put the credentials in `.env` first:
 
 ```bash
 EMAIL_ENABLED=true
-EMAIL_HOST=smtp.gmail.com
-EMAIL_USERNAME=you@example.com
-EMAIL_PASSWORD='<gmail app password>'
+EMAIL_TENANT_ID='<microsoft entra tenant id>'
+EMAIL_CLIENT_ID='<application client id>'
+EMAIL_CLIENT_SECRET='<application client secret>'
+EMAIL_FROM_ADDRESS='noreply@your-domain.example'
 docker compose -f deploy/docker-compose.yml up --build
 ```
 
@@ -370,12 +373,13 @@ PostgreSQL on the host.
 started in Production. The recommended Docker Compose flow uses Development automatically;
 see [Recommended Docker Compose workflow](#recommended-docker-compose-workflow).
 
-**`Email:Enabled is true but Email:Host is not set`** — a startup validation failure from
-`EmailOptions`. Fill in the `Email` section or set `Enabled` to `false`.
+**`Email is enabled but its Microsoft Graph credentials are incomplete`** — a startup
+validation failure from `EmailOptions`. Set `TenantId`, `ClientId`, and `ClientSecret`, or
+set `Enabled` to `false`.
 
-**SMTP auth fails against Gmail** — the password must be a 16-character *app password*, not
-the account password, and 2-Step Verification must be on. Port 587 with `UseSsl: true` means
-STARTTLS. Port 465 will not work: `System.Net.Mail.SmtpClient` does not support implicit TLS.
+**Microsoft Graph returns 401/403** — verify the Entra tenant/application IDs, rotate an
+expired client secret, grant the application-level `Mail.Send` permission with admin
+consent, and confirm the application may send as `Email:FromAddress`.
 
 **Data from a previous run is gone** — expected. See `Database:ResetOnStartup` above. Set it
 to `false` in `appsettings.Development.json` to keep data across restarts.

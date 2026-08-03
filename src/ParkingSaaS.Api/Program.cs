@@ -11,10 +11,13 @@ using ParkingSaaS.Application;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Common.Options;
 using ParkingSaaS.Infrastructure;
+using ParkingSaaS.Infrastructure.Email;
 using ParkingSaaS.Infrastructure.Persistence;
+using ParkingSaaS.Infrastructure.Persistence.Seed;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+await AwsEmailConfiguration.AddSecretsManagerValuesAsync(builder.Configuration);
 
 // ---- Logging (Serilog, structured) -----------------------------------------
 builder.Host.UseSerilog((context, config) => config
@@ -50,7 +53,7 @@ builder.Services.AddEndpointsApiExplorer();
 // ---- Swagger / OpenAPI with bearer auth ------------------------------------
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new() { Title = "ParkingSaaS API", Version = "v1" });
+    c.SwaggerDoc("v1", new() { Title = "PBP Parking API", Version = "v1" });
     c.AddSecurityDefinition("Bearer", new()
     {
         Name = "Authorization",
@@ -157,13 +160,32 @@ await DatabaseInitializer.InitializeAsync(
     seedDevelopmentData: app.Environment.IsDevelopment(),
     resetData: resetOnStartup,
     loggerFactory: app.Services.GetRequiredService<ILoggerFactory>(),
-    passwordHasher: app.Services.GetRequiredService<IPasswordHasher>());
+    passwordHasher: app.Services.GetRequiredService<IPasswordHasher>(),
+    bootstrapAdmin: builder.Configuration
+        .GetSection(BootstrapAdminOptions.SectionName)
+        .Get<BootstrapAdminOptions>() ?? new BootstrapAdminOptions());
 
 // ---- Middleware pipeline ----------------------------------------------------
 app.UseExceptionHandler();
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseSerilogRequestLogging();
+
+if (builder.Configuration.GetValue<bool>("CloudFront:TrustForwardedProto"))
+{
+    app.Use(async (context, next) =>
+    {
+        if (string.Equals(
+                context.Request.Headers["CloudFront-Forwarded-Proto"].ToString(),
+                "https",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            context.Request.Scheme = "https";
+        }
+
+        await next();
+    });
+}
 
 if (app.Environment.IsDevelopment())
 {

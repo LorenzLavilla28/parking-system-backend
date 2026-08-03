@@ -4,7 +4,8 @@ namespace ParkingSaaS.Contracts.Customer;
 public sealed record PublicLocationResponse(
     string Slug,
     string Name,
-    string? Address);
+    string? Address,
+    string? LogoUrl);
 
 public sealed record PlateLookupRequest(
     string PlateNumber,

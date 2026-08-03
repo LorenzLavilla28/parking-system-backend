@@ -57,7 +57,15 @@ public sealed class CustomerPublicService : ICustomerPublicService
             .FirstOrDefaultAsync(l => l.Slug == normalizedSlug && l.Status == LocationStatus.Active, ct)
             ?? throw new NotFoundException("Parking location not found.");
 
-        return new PublicLocationResponse(location.Slug, location.Name, location.Address);
+        var hasLogo = await _db.Tenants
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(t => t.Id == location.TenantId && t.LogoObjectKey != null, ct);
+        return new PublicLocationResponse(
+            location.Slug,
+            location.Name,
+            location.Address,
+            hasLogo ? $"/api/customer/locations/{location.Slug}/logo" : null);
     }
 
     public async Task<PlateLookupResponse> LookupByPlateAsync(

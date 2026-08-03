@@ -21,6 +21,7 @@ public static class DatabaseInitializer
         bool resetData,
         ILoggerFactory loggerFactory,
         IPasswordHasher passwordHasher,
+        BootstrapAdminOptions bootstrapAdmin,
         CancellationToken ct = default)
     {
         var tenantContext = new SystemTenantContext();
@@ -54,6 +55,15 @@ public static class DatabaseInitializer
         {
             var seeder = new DevDataSeeder(db, passwordHasher, loggerFactory.CreateLogger<DevDataSeeder>());
             await seeder.SeedAsync(ct);
+        }
+
+        if (bootstrapAdmin.Enabled)
+        {
+            var seeder = new BootstrapAdminSeeder(
+                db,
+                passwordHasher,
+                loggerFactory.CreateLogger<BootstrapAdminSeeder>());
+            await seeder.SeedAsync(bootstrapAdmin, ct);
         }
     }
 }

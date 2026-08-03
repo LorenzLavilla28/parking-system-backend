@@ -5,9 +5,9 @@ using ParkingSaaS.Domain.Emails;
 namespace ParkingSaaS.Infrastructure.Email;
 
 /// <summary>
-/// No-op <see cref="IEmailSender"/> used when email delivery is disabled or no SMTP
-/// host is configured (development/CI). Records what would have been sent so queued
-/// mail is observable in logs, and always "succeeds" so nothing dead-letters.
+/// No-op <see cref="IEmailSender"/> used when email delivery is disabled
+/// (development/CI). Records what would have been sent so queued mail is observable
+/// in logs, and always "succeeds" so nothing dead-letters.
 /// </summary>
 public sealed class LoggingEmailSender : IEmailSender
 {

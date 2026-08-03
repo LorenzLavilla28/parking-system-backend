@@ -24,7 +24,7 @@ public sealed class EmailDispatchServiceTests
         _db = InMemoryDb.Create(_tenant);
         _service = new EmailDispatchService(
             _db, _sender, _clock,
-            Options.Create(new EmailOptions { DispatchBatchSize = 25 }),
+            Options.Create(new EmailOptions { Enabled = true, DispatchBatchSize = 25 }),
             NullLogger<EmailDispatchService>.Instance);
     }
 
@@ -56,6 +56,22 @@ public sealed class EmailDispatchServiceTests
         Enqueue(nextAttempt: _clock.UtcNow.AddMinutes(10));
 
         var summary = await _service.DispatchDueAsync(CancellationToken.None);
+
+        summary.Attempted.Should().Be(0);
+        _sender.Sent.Should().BeEmpty();
+        (await _db.Emails.SingleAsync()).Status.Should().Be(EmailStatus.Pending);
+    }
+
+    [Fact]
+    public async Task Disabled_delivery_leaves_due_messages_pending()
+    {
+        Enqueue();
+        var disabledService = new EmailDispatchService(
+            _db, _sender, _clock,
+            Options.Create(new EmailOptions { Enabled = false, DispatchBatchSize = 25 }),
+            NullLogger<EmailDispatchService>.Instance);
+
+        var summary = await disabledService.DispatchDueAsync(CancellationToken.None);
 
         summary.Attempted.Should().Be(0);
         _sender.Sent.Should().BeEmpty();

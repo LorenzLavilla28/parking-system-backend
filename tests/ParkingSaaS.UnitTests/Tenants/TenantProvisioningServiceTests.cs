@@ -77,4 +77,54 @@ public sealed class TenantProvisioningServiceTests
         changedPlan.SubscriptionPlan.Should().Be("Enterprise");
         changedPlan.AdditionalSlotCapacity.Should().Be(20);
     }
+
+    [Fact]
+    public async Task Starter_can_be_onboarded_with_ten_slots_at_fifteen_hundred_pesos_per_month()
+    {
+        var response = await _service.CreateAsync(new CreateTenantRequest(
+            "Small Parking", "small-parking", "Starter", "PHP", "Asia/Manila",
+            "Ada", "Admin", "small@parking.test", "StrongPass!2026",
+            PurchasedSlotCapacityPerLocation: 10), CancellationToken.None);
+
+        response.PurchasedSlotCapacityPerLocation.Should().Be(10);
+        response.EffectiveMaximumSlotsPerLocation.Should().Be(10);
+        response.MonthlyPrice.Should().Be(1500m);
+        response.PricePerSlot.Should().Be(150m);
+        response.CapacityPricingEnabled.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Adding_capacity_recalculates_the_monthly_price_from_the_selected_capacity()
+    {
+        var response = await _service.CreateAsync(new CreateTenantRequest(
+            "Small Parking", "small-parking", "Starter", "PHP", "Asia/Manila",
+            "Ada", "Admin", "small@parking.test", "StrongPass!2026",
+            PurchasedSlotCapacityPerLocation: 10), CancellationToken.None);
+
+        var updated = await _service.UpdateCapacityAddonAsync(
+            response.Id,
+            new UpdateTenantCapacityAddonRequest(5, "Approved five-slot expansion"),
+            CancellationToken.None);
+
+        updated.EffectiveMaximumSlotsPerLocation.Should().Be(15);
+        updated.MonthlyPrice.Should().Be(2250m);
+    }
+
+    [Fact]
+    public async Task Changing_plan_recalculates_price_without_losing_selected_capacity()
+    {
+        var response = await _service.CreateAsync(new CreateTenantRequest(
+            "Small Parking", "small-parking", "Starter", "PHP", "Asia/Manila",
+            "Ada", "Admin", "small@parking.test", "StrongPass!2026",
+            PurchasedSlotCapacityPerLocation: 10), CancellationToken.None);
+
+        var changed = await _service.ChangePlanAsync(
+            response.Id,
+            new UpdateTenantPlanRequest("Growth", "Approved plan change"),
+            CancellationToken.None);
+
+        changed.PurchasedSlotCapacityPerLocation.Should().Be(10);
+        changed.EffectiveMaximumSlotsPerLocation.Should().Be(10);
+        changed.MonthlyPrice.Should().Be(1200m);
+    }
 }

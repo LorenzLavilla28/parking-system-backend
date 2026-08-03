@@ -24,7 +24,7 @@ internal static class TestEmail
 public sealed class FakeEmailSender : IEmailSender
 {
     public bool ShouldThrow { get; set; }
-    public string FailureMessage { get; set; } = "smtp unavailable";
+    public string FailureMessage { get; set; } = "email provider unavailable";
     public List<EmailMessage> Sent { get; } = new();
 
     public Task SendAsync(EmailMessage message, CancellationToken cancellationToken)
@@ -118,12 +118,12 @@ public sealed class FakeSessionPricingService : ISessionPricingService
 public sealed class FakePayMongoCredentialsResolver : IPayMongoCredentialsResolver
 {
     public ResolvedPayMongoCredentials? Result { get; set; } =
-        new("sk_test_fake", "whsec_test_fake", false, "acct_test_fake");
+        new("sk_live_fake", "whsec_live_fake", "acct_live_fake");
 
     public Task<ResolvedPayMongoCredentials?> ResolveAsync(Guid? tenantId, CancellationToken cancellationToken)
         => Task.FromResult(Result);
 
-    public void Invalidate(Guid tenantId, string environment) { }
+    public void Invalidate(Guid tenantId) { }
 }
 
 /// <summary>Payment gateway whose responses the test controls and whose calls it inspects.</summary>

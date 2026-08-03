@@ -15,6 +15,7 @@ public sealed class PayMongoConnectionService : IPayMongoConnectionService
     private readonly ITenantContext _tenant;
     private readonly IPayMongoCredentialStore _store;
     private readonly IPayMongoCredentialValidator _validator;
+    private readonly IPayMongoCredentialsResolver _credentialsResolver;
     private readonly IParkingTokenService _tokens;
     private readonly IAuditLogger? _audit;
     private readonly PayMongoOptions _options;
@@ -24,6 +25,7 @@ public sealed class PayMongoConnectionService : IPayMongoConnectionService
         ITenantContext tenant,
         IPayMongoCredentialStore store,
         IPayMongoCredentialValidator validator,
+        IPayMongoCredentialsResolver credentialsResolver,
         IParkingTokenService tokens,
         IOptions<PayMongoOptions> options,
         IAuditLogger? audit = null)
@@ -32,20 +34,20 @@ public sealed class PayMongoConnectionService : IPayMongoConnectionService
         _tenant = tenant;
         _store = store;
         _validator = validator;
+        _credentialsResolver = credentialsResolver;
         _tokens = tokens;
         _options = options.Value;
         _audit = audit;
     }
 
-    public async Task<IReadOnlyList<PayMongoConnectionResponse>> GetAsync(CancellationToken cancellationToken)
+    public async Task<PayMongoConnectionResponse?> GetAsync(CancellationToken cancellationToken)
     {
         EnsureTenant();
-        var connections = await _db.TenantPayMongoConnections
+        var connection = await _db.TenantPayMongoConnections
             .AsNoTracking()
-            .OrderBy(c => c.Environment)
-            .ToListAsync(cancellationToken);
+            .FirstOrDefaultAsync(cancellationToken);
 
-        return connections.Select(ToResponse).ToArray();
+        return connection is null ? null : ToResponse(connection);
     }
 
     public async Task<PayMongoConnectionResponse> ConnectAsync(
@@ -53,32 +55,30 @@ public sealed class PayMongoConnectionService : IPayMongoConnectionService
         CancellationToken cancellationToken)
     {
         EnsureTenant();
-        var environment = TenantPayMongoConnection.NormalizeEnvironment(request.Environment);
         var secretKey = request.SecretKey.Trim();
         var webhookSecret = request.WebhookSecret.Trim();
 
         if (string.IsNullOrWhiteSpace(webhookSecret))
             throw new ConflictException("A PayMongo webhook secret is required.");
 
-        var validation = await _validator.ValidateAsync(secretKey, environment, cancellationToken);
+        var validation = await _validator.ValidateAsync(secretKey, cancellationToken);
         if (!validation.IsValid)
             throw new ConflictException(validation.Error ?? "PayMongo credentials could not be validated.");
 
-        var secretName = $"{_options.SecretNamePrefix.TrimEnd('/')}/{_tenant.TenantId}/paymongo/{environment}";
+        var secretName = $"{_options.SecretNamePrefix.TrimEnd('/')}/{_tenant.TenantId}/paymongo/live";
         var secretArn = await _store.CreateOrUpdateAsync(
             secretName,
             new PayMongoSecretValues(secretKey, webhookSecret),
             cancellationToken);
 
         var connection = await _db.TenantPayMongoConnections
-            .FirstOrDefaultAsync(c => c.Environment == environment, cancellationToken);
+            .FirstOrDefaultAsync(cancellationToken);
 
         if (connection is null)
         {
             var webhookToken = _tokens.GeneratePublicToken();
             connection = new TenantPayMongoConnection(
                 _tenant.TenantId,
-                environment,
                 secretArn,
                 _tokens.Hash(webhookToken),
                 _tokens.Protect(webhookToken));
@@ -96,34 +96,32 @@ public sealed class PayMongoConnectionService : IPayMongoConnectionService
                 nameof(TenantPayMongoConnection),
                 connection.Id.ToString(),
                 oldValues: null,
-                newValues: new { Environment = environment, connection.Status, connection.PayMongoAccountId },
+                newValues: new { Mode = "live", connection.Status, connection.PayMongoAccountId },
                 reason: null,
                 new AuditContext(null, null),
                 cancellationToken);
         }
 
         await _db.SaveChangesAsync(cancellationToken);
+        _credentialsResolver.Invalidate(_tenant.TenantId);
         return ToResponse(connection);
     }
 
-    public async Task<PayMongoConnectionResponse> DisconnectAsync(
-        string environment,
-        CancellationToken cancellationToken)
+    public async Task<PayMongoConnectionResponse> DisconnectAsync(CancellationToken cancellationToken)
     {
         EnsureTenant();
-        var normalized = TenantPayMongoConnection.NormalizeEnvironment(environment);
         var connection = await _db.TenantPayMongoConnections
-            .FirstOrDefaultAsync(c => c.Environment == normalized, cancellationToken)
-            ?? throw new NotFoundException("PayMongo is not connected for this environment.");
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException("PayMongo is not connected for this tenant.");
 
         connection.MarkDisconnected(DateTimeOffset.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
+        _credentialsResolver.Invalidate(_tenant.TenantId);
         return ToResponse(connection);
     }
 
     private PayMongoConnectionResponse ToResponse(TenantPayMongoConnection connection)
         => new(
-            connection.Environment,
             connection.Status.ToString(),
             connection.PayMongoAccountId,
             connection.LastValidatedAt,

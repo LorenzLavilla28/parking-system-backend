@@ -6,7 +6,7 @@ namespace ParkingSaaS.UnitTests.Payments;
 
 public sealed class PayMongoSignatureTests
 {
-    private const string Secret = "whsk_test_secret";
+    private const string Secret = "whsk_live_secret";
     private const string Payload = "{\"data\":{\"id\":\"evt_1\"}}";
 
     private static string SignedHeader(string timestamp, string payload, string secret)

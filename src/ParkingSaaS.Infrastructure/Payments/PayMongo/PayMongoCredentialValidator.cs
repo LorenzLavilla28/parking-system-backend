@@ -27,13 +27,10 @@ public sealed class PayMongoCredentialValidator : IPayMongoCredentialValidator
 
     public async Task<PayMongoCredentialValidationResult> ValidateAsync(
         string secretKey,
-        string environment,
         CancellationToken cancellationToken)
     {
-        var normalizedEnvironment = environment.Trim().ToLowerInvariant();
-        var expectedPrefix = normalizedEnvironment == "live" ? "sk_live_" : "sk_test_";
-        if (!secretKey.StartsWith(expectedPrefix, StringComparison.Ordinal))
-            return new(false, null, $"The key must start with {expectedPrefix} for {normalizedEnvironment} mode.");
+        if (!secretKey.StartsWith("sk_live_", StringComparison.Ordinal))
+            return new(false, null, "Only live PayMongo secret keys beginning with sk_live_ are accepted.");
 
         if (!_options.ValidateCredentialsWithProvider)
             return new(true, null, null);

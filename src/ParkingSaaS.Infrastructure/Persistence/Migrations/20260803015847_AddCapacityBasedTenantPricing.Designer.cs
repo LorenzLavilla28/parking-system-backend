@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using ParkingSaaS.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using ParkingSaaS.Infrastructure.Persistence;
 namespace ParkingSaaS.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260803015847_AddCapacityBasedTenantPricing")]
+    partial class AddCapacityBasedTenantPricing
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -350,6 +353,11 @@ namespace ParkingSaaS.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("Environment")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)");
+
                     b.Property<string>("LastError")
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
@@ -390,10 +398,10 @@ namespace ParkingSaaS.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("PayMongoAccountId");
 
-                    b.HasIndex("TenantId")
+                    b.HasIndex("WebhookTokenHash")
                         .IsUnique();
 
-                    b.HasIndex("WebhookTokenHash")
+                    b.HasIndex("TenantId", "Environment")
                         .IsUnique();
 
                     b.ToTable("tenant_paymongo_connections", (string)null);
@@ -744,14 +752,6 @@ namespace ParkingSaaS.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
-
-                    b.Property<string>("LogoContentType")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("LogoObjectKey")
-                        .HasMaxLength(300)
-                        .HasColumnType("character varying(300)");
 
                     b.Property<string>("Name")
                         .IsRequired()

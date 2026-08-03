@@ -37,6 +37,12 @@ public sealed class EmailDispatchService : IEmailDispatchService
 
     public async Task<EmailDispatchSummary> DispatchDueAsync(CancellationToken ct)
     {
+        if (!_options.Enabled)
+        {
+            _logger.LogDebug("Email delivery is disabled; pending messages remain queued.");
+            return new EmailDispatchSummary(0, 0, 0, 0);
+        }
+
         var now = _clock.UtcNow;
         var batchSize = Math.Clamp(_options.DispatchBatchSize, 1, 200);
 

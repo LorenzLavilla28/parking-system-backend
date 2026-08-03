@@ -19,16 +19,7 @@ public sealed class PayMongoOptions
     public const string SectionName = "PayMongo";
 
     public string BaseUrl { get; set; } = "https://api.paymongo.com/v1";
-    public string SecretKey { get; set; } = string.Empty;
-    public string WebhookSecret { get; set; } = string.Empty;
-    /// <summary>
-    /// Retained for configuration compatibility. Global PayMongo credentials
-    /// are no longer supported; payment credentials must belong to the tenant.
-    /// </summary>
-    [Obsolete("Global PayMongo fallback is no longer supported.")]
-    public bool AllowGlobalFallback { get; set; }
     public bool ValidateCredentialsWithProvider { get; set; } = true;
-    public string ActiveEnvironment { get; set; } = "test";
     public string WebhookBaseUrl { get; set; } = string.Empty;
     public string SecretNamePrefix { get; set; } = "parking-saas/tenants";
     public int CredentialCacheMinutes { get; set; } = 10;
@@ -53,10 +44,24 @@ public sealed class AwsSecretsOptions
     public string Region { get; set; } = "ap-southeast-1";
 }
 
+public sealed class TenantBrandingOptions
+{
+    public const string SectionName = "TenantBranding";
+
+    /// <summary>Private S3 bucket used for tenant-owned branding assets.</summary>
+    public string BucketName { get; set; } = "parking-system-tenant-assets";
+
+    public string Region { get; set; } = "ap-southeast-1";
+
+    /// <summary>Maximum uploaded logo size. Defaults to 2 MiB.</summary>
+    public long MaxLogoBytes { get; set; } = 2 * 1024 * 1024;
+}
+
 /// <summary>
-/// Outbound email settings. When <see cref="Enabled"/> is false or no <see cref="Host"/>
-/// is configured, a logging no-op sender is used (dev/CI) so queued mail is visible in
-/// logs without an SMTP server. Secrets come from Secrets Manager/SSM in production.
+/// Outbound email settings for Microsoft Graph app-only delivery. When
+/// <see cref="Enabled"/> is false, a logging no-op sender is used (dev/CI) so queued
+/// mail remains visible without contacting Microsoft Graph. Secrets come from secure
+/// configuration providers in production.
 /// </summary>
 public sealed class EmailOptions
 {
@@ -65,16 +70,13 @@ public sealed class EmailOptions
     /// <summary>Master switch for real delivery. False → messages are queued and logged, not sent.</summary>
     public bool Enabled { get; set; }
 
-    /// <summary>Email transport: Gmail (SMTP) or MicrosoftGraph.</summary>
-    public string Provider { get; set; } = "Smtp";
+    /// <summary>
+    /// Optional AWS Secrets Manager secret containing TenantId, ClientId, ClientSecret,
+    /// FromAddress, and FromName. Direct configuration values take precedence.
+    /// </summary>
+    public string SecretName { get; set; } = string.Empty;
 
-    public string Host { get; set; } = string.Empty;
-    public int Port { get; set; } = 587;
-    public bool UseSsl { get; set; } = true;
-    public string Username { get; set; } = string.Empty;
-    public string Password { get; set; } = string.Empty;
-
-    /// <summary>Microsoft Entra app-only credentials used by the Microsoft Graph transport.</summary>
+    /// <summary>Microsoft Entra app-only credentials used by Microsoft Graph.</summary>
     public string TenantId { get; set; } = string.Empty;
     public string ClientId { get; set; } = string.Empty;
     public string ClientSecret { get; set; } = string.Empty;

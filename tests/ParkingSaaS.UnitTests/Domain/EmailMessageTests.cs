@@ -42,11 +42,11 @@ public sealed class EmailMessageTests
     public void MarkFailed_reschedules_with_backoff_and_stays_pending()
     {
         var m = Create(maxAttempts: 3);
-        m.MarkFailed(Now, "smtp timeout");
+        m.MarkFailed(Now, "provider timeout");
 
         m.Status.Should().Be(EmailStatus.Pending);
         m.AttemptCount.Should().Be(1);
-        m.LastError.Should().Be("smtp timeout");
+        m.LastError.Should().Be("provider timeout");
         m.NextAttemptAt.Should().BeAfter(Now);      // backoff applied
         m.IsDue(Now).Should().BeFalse();             // not due until backoff elapses
         m.IsDue(m.NextAttemptAt).Should().BeTrue();

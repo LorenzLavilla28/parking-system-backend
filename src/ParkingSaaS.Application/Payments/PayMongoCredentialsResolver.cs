@@ -36,21 +36,20 @@ public sealed class PayMongoCredentialsResolver : IPayMongoCredentialsResolver
                 .IgnoreQueryFilters()
                 .AsNoTracking()
                 .Where(c => c.TenantId == id
-                            && c.Environment == TenantPayMongoConnection.NormalizeEnvironment(_options.ActiveEnvironment)
                             && c.Status == PayMongoConnectionStatus.Connected)
                 .FirstOrDefaultAsync(cancellationToken);
 
             if (connection is not null)
             {
-                var cacheKey = CacheKey(connection.TenantId, connection.Environment);
+                var cacheKey = CacheKey(connection.TenantId);
                 if (_cache.TryGetValue<PayMongoSecretValues>(cacheKey, out var cached) && cached is not null)
-                    return new(cached.SecretKey, cached.WebhookSecret, false, connection.PayMongoAccountId);
+                    return new(cached.SecretKey, cached.WebhookSecret, connection.PayMongoAccountId);
 
                 var values = await _store.GetAsync(connection.SecretArn, cancellationToken);
                 if (values is not null)
                 {
                     _cache.Set(cacheKey, values, TimeSpan.FromMinutes(Math.Max(1, _options.CredentialCacheMinutes)));
-                    return new(values.SecretKey, values.WebhookSecret, false, connection.PayMongoAccountId);
+                    return new(values.SecretKey, values.WebhookSecret, connection.PayMongoAccountId);
                 }
             }
         }
@@ -61,9 +60,8 @@ public sealed class PayMongoCredentialsResolver : IPayMongoCredentialsResolver
         return null;
     }
 
-    public void Invalidate(Guid tenantId, string environment)
-        => _cache.Remove(CacheKey(tenantId, TenantPayMongoConnection.NormalizeEnvironment(environment)));
+    public void Invalidate(Guid tenantId) => _cache.Remove(CacheKey(tenantId));
 
-    private static string CacheKey(Guid tenantId, string environment)
-        => $"paymongo:{tenantId:N}:{environment}";
+    private static string CacheKey(Guid tenantId)
+        => $"paymongo:{tenantId:N}:live";
 }

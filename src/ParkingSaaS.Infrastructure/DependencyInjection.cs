@@ -1,6 +1,7 @@
 using System.IO;
 using Amazon;
 using Amazon.SecretsManager;
+using Amazon.S3;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -18,6 +19,7 @@ using ParkingSaaS.Infrastructure.Security;
 using ParkingSaaS.Infrastructure.Sessions;
 using ParkingSaaS.Infrastructure.Tenancy;
 using ParkingSaaS.Infrastructure.Time;
+using ParkingSaaS.Infrastructure.TenantAssets;
 
 namespace ParkingSaaS.Infrastructure;
 
@@ -33,20 +35,18 @@ public static class DependencyInjection
         services.AddOptions<PricingOptions>().Bind(configuration.GetSection(PricingOptions.SectionName));
         services.AddOptions<PayMongoOptions>().Bind(configuration.GetSection(PayMongoOptions.SectionName));
         services.AddOptions<AwsSecretsOptions>().Bind(configuration.GetSection(AwsSecretsOptions.SectionName));
+        services.AddOptions<TenantBrandingOptions>()
+            .Bind(configuration.GetSection(TenantBrandingOptions.SectionName))
+            .Validate(o => !string.IsNullOrWhiteSpace(o.BucketName), "TenantBranding:BucketName is required.")
+            .Validate(o => o.MaxLogoBytes is > 0 and <= 10 * 1024 * 1024, "TenantBranding:MaxLogoBytes must be between 1 byte and 10 MiB.")
+            .ValidateOnStart();
         services.AddOptions<EmailOptions>()
             .Bind(configuration.GetSection(EmailOptions.SectionName))
             .Validate(o => !o.Enabled ||
-                string.Equals(o.Provider, "Gmail", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(o.Provider, "Smtp", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(o.Provider, "MicrosoftGraph", StringComparison.OrdinalIgnoreCase),
-                "Email:Provider must be Gmail, Smtp, or MicrosoftGraph.")
-            .Validate(o => !o.Enabled ||
-                (string.Equals(o.Provider, "MicrosoftGraph", StringComparison.OrdinalIgnoreCase)
-                    ? !string.IsNullOrWhiteSpace(o.TenantId)
-                        && !string.IsNullOrWhiteSpace(o.ClientId)
-                        && !string.IsNullOrWhiteSpace(o.ClientSecret)
-                    : !string.IsNullOrWhiteSpace(o.Host)),
-                "Email is enabled but its transport settings are incomplete.")
+                !string.IsNullOrWhiteSpace(o.TenantId)
+                && !string.IsNullOrWhiteSpace(o.ClientId)
+                && !string.IsNullOrWhiteSpace(o.ClientSecret),
+                "Email is enabled but its Microsoft Graph credentials are incomplete.")
             .Validate(o => !o.Enabled || !string.IsNullOrWhiteSpace(o.FromAddress),
                 "Email:Enabled is true but Email:FromAddress is not set.")
             .ValidateOnStart();
@@ -99,6 +99,12 @@ public static class DependencyInjection
             var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<AwsSecretsOptions>>().Value;
             return new AmazonSecretsManagerClient(RegionEndpoint.GetBySystemName(options.Region));
         });
+        services.AddSingleton<IAmazonS3>(sp =>
+        {
+            var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<TenantBrandingOptions>>().Value;
+            return new AmazonS3Client(RegionEndpoint.GetBySystemName(options.Region));
+        });
+        services.AddSingleton<ITenantLogoStorage, S3TenantLogoStorage>();
         services.AddSingleton<IPayMongoCredentialStore, AwsPayMongoCredentialStore>();
         services.AddHttpClient<IPayMongoCredentialValidator, PayMongoCredentialValidator>();
 
@@ -106,15 +112,13 @@ public static class DependencyInjection
         services.AddHttpClient<IPaymentGateway, PayMongoPaymentGateway>();
         services.AddHostedService<ReconciliationHostedService>();
 
-        // Email delivery transport: real SMTP when enabled, otherwise a logging no-op so
-        // queued mail is visible without a mail server (dev/CI). A misconfigured Enabled=true
-        // fails at startup via the EmailOptions validation above rather than silently no-opping.
+        // Microsoft Graph is the only real email transport. When delivery is disabled, a
+        // logging no-op keeps queued mail visible in dev/CI. Incomplete Graph credentials
+        // fail startup when Enabled=true rather than silently dropping email.
         var email = configuration.GetSection(EmailOptions.SectionName).Get<EmailOptions>() ?? new EmailOptions();
         services.AddHttpClient();
-        if (email.Enabled && string.Equals(email.Provider, "MicrosoftGraph", StringComparison.OrdinalIgnoreCase))
+        if (email.Enabled)
             services.AddSingleton<IEmailSender, GraphEmailSender>();
-        else if (email.Enabled)
-            services.AddSingleton<IEmailSender, SmtpEmailSender>();
         else
             services.AddSingleton<IEmailSender, LoggingEmailSender>();
         services.AddHostedService<EmailDispatchHostedService>();

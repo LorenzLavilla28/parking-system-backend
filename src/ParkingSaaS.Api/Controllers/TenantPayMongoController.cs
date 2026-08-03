@@ -18,13 +18,13 @@ public sealed class TenantPayMongoController : ApiControllerBase
 
     [HttpGet]
     public async Task<IActionResult> Get(CancellationToken ct)
-        => Ok(ApiResponse<IReadOnlyList<PayMongoConnectionResponse>>.Ok(await _connections.GetAsync(ct)));
+        => Ok(ApiResponse<PayMongoConnectionResponse?>.Ok(await _connections.GetAsync(ct)));
 
     [HttpPost("connect")]
     public async Task<IActionResult> Connect([FromBody] ConnectPayMongoRequest request, CancellationToken ct)
         => Ok(ApiResponse<PayMongoConnectionResponse>.Ok(await _connections.ConnectAsync(request, ct)));
 
     [HttpPost("disconnect")]
-    public async Task<IActionResult> Disconnect([FromQuery] string environment, CancellationToken ct)
-        => Ok(ApiResponse<PayMongoConnectionResponse>.Ok(await _connections.DisconnectAsync(environment, ct)));
+    public async Task<IActionResult> Disconnect(CancellationToken ct)
+        => Ok(ApiResponse<PayMongoConnectionResponse>.Ok(await _connections.DisconnectAsync(ct)));
 }

@@ -17,6 +17,7 @@ public sealed record PasswordResetResponse(string Message);
 public sealed record AuthUserDto(
     Guid Id,
     Guid TenantId,
+    string TenantName,
     string Email,
     string FullName,
     IReadOnlyCollection<string> Roles,

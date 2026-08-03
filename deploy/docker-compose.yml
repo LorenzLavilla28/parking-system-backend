@@ -41,19 +41,15 @@ services:
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       AwsSecrets__Enabled: ${AWS_SECRETS_ENABLED:-true}
       AwsSecrets__Region: ${AWS_REGION:-ap-southeast-1}
-      PayMongo__ActiveEnvironment: ${PAYMONGO_ACTIVE_ENVIRONMENT:-test}
       PayMongo__WebhookBaseUrl: ${PAYMONGO_WEBHOOK_BASE_URL:-http://localhost:5274}
       # Email is disabled by default in Docker. Set EMAIL_ENABLED=true only after
-      # providing the matching SMTP or Microsoft Graph values in .env.
+      # providing Microsoft Graph app-only credentials in .env.
       Email__Enabled: ${EMAIL_ENABLED:-false}
-      Email__Provider: ${EMAIL_PROVIDER:-Smtp}
-      Email__Host: ${EMAIL_HOST:-}
-      Email__Port: ${EMAIL_PORT:-587}
-      Email__UseSsl: ${EMAIL_USE_SSL:-true}
-      Email__Username: ${EMAIL_USERNAME:-}
-      Email__Password: ${EMAIL_PASSWORD:-}
+      Email__TenantId: ${EMAIL_TENANT_ID:-}
+      Email__ClientId: ${EMAIL_CLIENT_ID:-}
+      Email__ClientSecret: ${EMAIL_CLIENT_SECRET:-}
       Email__FromAddress: ${EMAIL_FROM_ADDRESS:-no-reply@parking.local}
-      Email__FromName: ${EMAIL_FROM_NAME:-ParkingSaaS}
+      Email__FromName: ${EMAIL_FROM_NAME:-PBP Parking}
       Email__AppBaseUrl: ${EMAIL_APP_BASE_URL:-http://localhost:5173}
     ports:
       # Keep the host port aligned with the existing frontend/local launch URL.

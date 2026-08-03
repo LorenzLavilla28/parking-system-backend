@@ -40,5 +40,7 @@ public sealed record LocationQuotaResponse(
     int? MaximumLocations,
     int? MaximumSlotsPerLocation,
     bool CanCreateLocation,
+    int? PurchasedSlotCapacityPerLocation,
+    bool CapacityPricingEnabled,
     int AdditionalSlotCapacity,
     int? EffectiveMaximumSlotsPerLocation);

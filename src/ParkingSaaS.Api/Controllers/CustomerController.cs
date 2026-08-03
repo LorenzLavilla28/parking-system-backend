@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using ParkingSaaS.Application.Customer;
 using ParkingSaaS.Application.Payments;
+using ParkingSaaS.Application.Tenants;
 using ParkingSaaS.Contracts.Common;
 using ParkingSaaS.Contracts.Customer;
 
@@ -20,18 +21,30 @@ public sealed class CustomerController : ApiControllerBase
     private readonly ICustomerPublicService _service;
     private readonly ICustomerPricingService _pricing;
     private readonly ICustomerPaymentService _payments;
+    private readonly ITenantBrandingService _branding;
 
     public CustomerController(
-        ICustomerPublicService service, ICustomerPricingService pricing, ICustomerPaymentService payments)
+        ICustomerPublicService service,
+        ICustomerPricingService pricing,
+        ICustomerPaymentService payments,
+        ITenantBrandingService branding)
     {
         _service = service;
         _pricing = pricing;
         _payments = payments;
+        _branding = branding;
     }
 
     [HttpGet("locations/{slug}")]
     public async Task<IActionResult> GetLocation(string slug, CancellationToken ct)
         => Ok(ApiResponse<PublicLocationResponse>.Ok(await _service.GetLocationAsync(slug, ct)));
+
+    [HttpGet("locations/{slug}/logo")]
+    public async Task<IActionResult> GetLocationLogo(string slug, CancellationToken ct)
+    {
+        var logo = await _branding.DownloadLogoForLocationAsync(slug, ct);
+        return File(logo.Content, logo.ContentType, enableRangeProcessing: false);
+    }
 
     [HttpPost("locations/{slug}/lookup")]
     [EnableRateLimiting("public-lookup")]
