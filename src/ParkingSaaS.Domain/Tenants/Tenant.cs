@@ -41,6 +41,15 @@ public class Tenant : AuditableEntity
 
     public string? LogoContentType { get; private set; }
 
+    /// <summary>Whether automatic operations-summary emails are enabled for this tenant.</summary>
+    public bool OperationsSummaryEnabled { get; private set; } = true;
+
+    /// <summary>Number of hours covered by, and between, automatic operations summaries.</summary>
+    public int OperationsSummaryIntervalHours { get; private set; } = 3;
+
+    /// <summary>Last time the scheduler evaluated and completed this tenant's summary run.</summary>
+    public DateTimeOffset? OperationsSummaryLastRunAt { get; private set; }
+
     private Tenant() { }
 
     public Tenant(string name, string slug, SubscriptionPlan plan, string currency, string timezone)
@@ -105,6 +114,27 @@ public class Tenant : AuditableEntity
         LogoObjectKey = null;
         LogoContentType = null;
     }
+
+    public void ConfigureOperationsSummary(bool enabled, int intervalHours, DateTimeOffset now)
+    {
+        if (intervalHours is < 1 or > 24)
+            throw new DomainException(
+                "tenant.operations_summary_interval_invalid",
+                "Operations summary interval must be between 1 and 24 hours.");
+
+        if (OperationsSummaryEnabled == enabled && OperationsSummaryIntervalHours == intervalHours)
+        {
+            OperationsSummaryLastRunAt ??= now;
+            return;
+        }
+
+        OperationsSummaryEnabled = enabled;
+        OperationsSummaryIntervalHours = intervalHours;
+        OperationsSummaryLastRunAt = now;
+    }
+
+    public void MarkOperationsSummaryRun(DateTimeOffset now)
+        => OperationsSummaryLastRunAt = now;
 
     public bool IsActive => Status == TenantStatus.Active;
 }

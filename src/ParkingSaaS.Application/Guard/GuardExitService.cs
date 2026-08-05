@@ -3,11 +3,13 @@ using Microsoft.Extensions.Logging;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Audit;
 using ParkingSaaS.Application.Common.Exceptions;
+using ParkingSaaS.Application.Payments;
 using ParkingSaaS.Application.Pricing;
 using ParkingSaaS.Contracts.Guard;
 using ParkingSaaS.Contracts.Realtime;
 using ParkingSaaS.Domain.Sessions;
 using ParkingSaaS.Domain.Users;
+using ParkingSaaS.Domain.Payments;
 
 namespace ParkingSaaS.Application.Guard;
 
@@ -26,11 +28,15 @@ public sealed class GuardExitService : IGuardExitService
     private readonly IAuditLogger _audit;
     private readonly IDateTime _clock;
     private readonly ISessionRealtimeNotifier _realtime;
+    private readonly IPaymentCheckoutCleanupService _checkoutCleanup;
+    private readonly IParkingTokenService _tokens;
     private readonly ILogger<GuardExitService> _logger;
 
     public GuardExitService(
         IApplicationDbContext db, ICurrentUser user, ISessionPricingService pricing,
-        IAuditLogger audit, IDateTime clock, ISessionRealtimeNotifier realtime, ILogger<GuardExitService> logger)
+        IAuditLogger audit, IDateTime clock, ISessionRealtimeNotifier realtime,
+        IPaymentCheckoutCleanupService checkoutCleanup, IParkingTokenService tokens,
+        ILogger<GuardExitService> logger)
     {
         _db = db;
         _user = user;
@@ -38,6 +44,8 @@ public sealed class GuardExitService : IGuardExitService
         _audit = audit;
         _clock = clock;
         _realtime = realtime;
+        _checkoutCleanup = checkoutCleanup;
+        _tokens = tokens;
         _logger = logger;
     }
 
@@ -66,7 +74,7 @@ public sealed class GuardExitService : IGuardExitService
         await GuardLocationAccess.EnsureCanOperateAsync(_db, _user, session.ParkingLocationId, ct);
 
         var now = _clock.UtcNow;
-        var (_, calculated) = await CalculateAsync(session, now, ct);
+        var (result, calculated) = await CalculateAsync(session, now, ct);
         session.RefreshTimeBasedStatus(now, calculated);
         if (!session.Status.IsActive())
             throw new ConflictException("This session is already closed.");
@@ -81,6 +89,13 @@ public sealed class GuardExitService : IGuardExitService
             throw new ConflictException("This session is overdue. The outstanding balance must be paid before exit.");
 
         var hasOverride = !string.IsNullOrWhiteSpace(request.OverrideReason);
+        var cashPaymentAmount = request.CashPaymentAmount ?? 0m;
+        if (cashPaymentAmount < 0m)
+            throw new ConflictException("The cash amount cannot be negative.");
+        if (cashPaymentAmount > 0m && !hasOverride)
+            throw new ConflictException("A cash amount can only be recorded with a supervisor override.");
+        if (cashPaymentAmount > outstanding)
+            throw new ConflictException("The cash amount cannot exceed the outstanding balance.");
         if (outstanding > 0m)
         {
             // Forcing exit past an outstanding balance requires a supervisor + reason.
@@ -90,7 +105,30 @@ public sealed class GuardExitService : IGuardExitService
                 throw new ForbiddenException("Only a supervisor can approve exit with an outstanding balance.");
         }
 
+        // A session that is being closed must not retain a payable checkout.
+        // Expire it before the session mutation so a late provider confirmation
+        // cannot race with the exit decision.
+        await _checkoutCleanup.CloseOpenCheckoutsAsync(session.Id, ct);
+
         var before = new { session.Status, session.TotalPaid, Outstanding = outstanding };
+
+        Payment? cashPayment = null;
+        if (cashPaymentAmount > 0m)
+        {
+            var receiptNumber = $"CR-{now:yyyyMMdd}-{_tokens.GenerateTicketCode()}";
+            var reference = _tokens.GeneratePublicToken();
+            cashPayment = Payment.CreateCashPaid(
+                session.TenantId, session.Id, feeQuoteId: null, result?.Currency ?? "PHP", cashPaymentAmount,
+                _tokens.Hash(reference), _tokens.Protect(reference), now, receiptNumber, _user.UserId ?? Guid.Empty);
+            var deadline = await _pricing.GetPaidExitDeadlineAsync(session, now, ct);
+            session.RegisterPayment(cashPaymentAmount, deadline);
+            await _db.Payments.AddAsync(cashPayment, ct);
+            await _audit.AddAsync(
+                session.TenantId, session.ParkingLocationId, "CashPaymentRecorded",
+                nameof(Payment), cashPayment.Id.ToString(), oldValues: null,
+                new { amount = cashPaymentAmount, receiptNumber, session.TotalPaid },
+                reason: request.OverrideReason, new AuditContext(ipAddress, request.DeviceInformation), ct);
+        }
 
         session.ApproveExit(_user.UserId ?? Guid.Empty, now, finalFee, request.ExitPhotoUrl);
 

@@ -1,12 +1,14 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Audit;
 using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Application.Guard;
 using ParkingSaaS.Contracts.Guard;
 using ParkingSaaS.Contracts.Realtime;
 using ParkingSaaS.Domain.Locations;
+using ParkingSaaS.Domain.Payments;
 using ParkingSaaS.Domain.Sessions;
 using ParkingSaaS.Domain.Users;
 using ParkingSaaS.Infrastructure.Persistence;
@@ -23,6 +25,7 @@ public sealed class GuardExitServiceTests
     private readonly TestClock _clock = new(new DateTimeOffset(2026, 6, 24, 18, 0, 0, TimeSpan.Zero));
     private readonly FakeSessionPricingService _pricing = new();
     private readonly FakeSessionRealtimeNotifier _realtime = new();
+    private readonly FakePaymentCheckoutCleanupService _checkoutCleanup = new();
     private readonly AppDbContext _db;
     private readonly GuardExitService _service;
     private ParkingLocation _location = null!;
@@ -33,7 +36,7 @@ public sealed class GuardExitServiceTests
         _user = new FakeCurrentUser { TenantId = _tenantId, UserId = Guid.NewGuid(), Roles = new[] { RoleType.Supervisor } };
         _db = InMemoryDb.Create(_tenant);
         var audit = new AuditLogger(_db, _user, _clock);
-        _service = new GuardExitService(_db, _user, _pricing, audit, _clock, _realtime, NullLogger<GuardExitService>.Instance);
+        _service = new GuardExitService(_db, _user, _pricing, audit, _clock, _realtime, _checkoutCleanup, new TestParkingTokenService(), NullLogger<GuardExitService>.Instance);
 
         _location = new ParkingLocation(_tenantId, "Lot", "lot", "Asia/Manila", null);
         _location.UpdateDetails(null, "Asia/Manila", true);
@@ -153,6 +156,27 @@ public sealed class GuardExitServiceTests
     }
 
     [Fact]
+    public async Task Supervisor_override_records_cash_payment_and_keeps_override_audit()
+    {
+        var s = AddSession();
+        _pricing.Result = FeeResults.Of(90m);
+
+        var result = await _service.ApproveExitAsync(
+            new ApproveExitRequest(s.Id, null, null, "Customer paid cash at exit", 50m),
+            "1.2.3.4", CancellationToken.None);
+
+        result.TotalPaid.Should().Be(50m);
+        var payment = await _db.Payments.SingleAsync();
+        payment.Provider.Should().Be(PaymentProvider.Cash);
+        payment.Amount.Should().Be(50m);
+        payment.Status.Should().Be(PaymentStatus.Paid);
+
+        var audits = await _db.AuditLogs.OrderBy(a => a.CreatedAt).ToListAsync();
+        audits.Should().Contain(a => a.Action == "CashPaymentRecorded");
+        audits.Should().Contain(a => a.Action == "ExitApprovedWithOverride");
+    }
+
+    [Fact]
     public async Task Plain_guard_cannot_force_exit_with_override()
     {
         // A guard assigned to the location, but lacking supervisor rights.
@@ -200,5 +224,14 @@ public sealed class GuardExitServiceTests
         var result = await _service.ApproveExitAsync(
             new ApproveExitRequest(s.Id, null, null, null), null, CancellationToken.None);
         result.Status.Should().Be(nameof(ParkingSessionStatus.Exited));
+    }
+
+    private sealed class TestParkingTokenService : IParkingTokenService
+    {
+        public string GeneratePublicToken() => "public-token";
+        public string GenerateTicketCode() => "TICKET";
+        public string Hash(string value) => value;
+        public string Protect(string value) => value;
+        public string Unprotect(string protectedValue) => protectedValue;
     }
 }

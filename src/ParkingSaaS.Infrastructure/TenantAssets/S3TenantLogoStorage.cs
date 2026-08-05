@@ -39,9 +39,9 @@ public sealed class S3TenantLogoStorage : ITenantLogoStorage
 
     public async Task<TenantLogoDownload?> GetAsync(string objectKey, CancellationToken ct)
     {
-        EnsureBucketConfigured();
         try
         {
+            EnsureBucketConfigured();
             var response = await _s3.GetObjectAsync(new GetObjectRequest
             {
                 BucketName = _options.BucketName,
@@ -52,6 +52,13 @@ public sealed class S3TenantLogoStorage : ITenantLogoStorage
         catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
             _logger.LogWarning("Tenant logo object {ObjectKey} was not found in bucket {BucketName}.", objectKey, _options.BucketName);
+            return null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Logos are optional UI decoration. A storage outage must not turn an
+            // otherwise healthy application page into a server error.
+            _logger.LogWarning(ex, "Unable to load tenant logo object {ObjectKey} from bucket {BucketName}.", objectKey, _options.BucketName);
             return null;
         }
     }

@@ -8,5 +8,11 @@ public interface IOperationsSummaryService
 
     Task<OperationsSummaryEmailResponse> QueueCurrentEmailAsync(int hours, CancellationToken ct);
 
-    Task<int> QueueScheduledEmailsAsync(int hours, CancellationToken ct);
+    Task<OperationsSummarySettingsResponse> GetSettingsAsync(CancellationToken ct);
+
+    Task<OperationsSummarySettingsResponse> UpdateSettingsAsync(
+        UpdateOperationsSummarySettingsRequest request,
+        CancellationToken ct);
+
+    Task<int> QueueScheduledEmailsAsync(CancellationToken ct);
 }

@@ -230,9 +230,17 @@ public sealed class CustomerPaymentService : ICustomerPaymentService
             }
 
             // Genuinely unpaid → safe to release the old checkout before starting a new one.
-            try { await _gateway.ExpireCheckoutAsync(prior.TenantId, checkoutId, ct); }
-            catch (Exception ex) { _logger.LogWarning(ex, "Failed to expire superseded checkout {CheckoutId}.", checkoutId); }
-            prior.Cancel();
+            try
+            {
+                await _gateway.ExpireCheckoutAsync(prior.TenantId, checkoutId, ct);
+                prior.Cancel();
+            }
+            catch (Exception ex)
+            {
+                // Do not mark the local attempt cancelled when the provider could
+                // not confirm that the checkout was safely expired.
+                _logger.LogWarning(ex, "Failed to expire superseded checkout {CheckoutId}; leaving it open.", checkoutId);
+            }
         }
     }
 

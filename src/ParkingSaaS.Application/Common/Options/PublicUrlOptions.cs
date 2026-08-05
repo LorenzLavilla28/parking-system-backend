@@ -95,8 +95,8 @@ public sealed class EmailOptions
     /// <summary>Enables the tenant-admin operations digest hosted job.</summary>
     public bool OperationsSummaryEnabled { get; set; } = true;
 
-    /// <summary>How often the operations digest covers and sends the latest window.</summary>
-    public int OperationsSummaryIntervalHours { get; set; } = 3;
+    /// <summary>How often the scheduler checks for tenants whose own digest interval is due.</summary>
+    public int OperationsSummarySweepMinutes { get; set; } = 1;
 }
 
 /// <summary>Pricing/quote behaviour knobs.</summary>

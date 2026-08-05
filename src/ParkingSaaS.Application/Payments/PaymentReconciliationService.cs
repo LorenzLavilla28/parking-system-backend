@@ -82,6 +82,11 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
         {
             try
             {
+                var sessionStatus = await _db.ParkingSessions
+                    .IgnoreQueryFilters()
+                    .Where(s => s.Id == payment.ParkingSessionId)
+                    .Select(s => (ParkingSessionStatus?)s.Status)
+                    .FirstOrDefaultAsync(ct);
                 var status = await _gateway.GetPaymentStatusAsync(payment.TenantId, payment.ProviderCheckoutSessionId!, ct);
                 switch (status.Status)
                 {
@@ -100,7 +105,21 @@ public sealed class PaymentReconciliationService : IPaymentReconciliationService
                         abandoned.Add(payment);
                         failed++;
                         break;
-                    // Pending/Processing → leave as-is for the next sweep.
+                    case PaymentStatus.Pending:
+                    case PaymentStatus.Processing:
+                        if (sessionStatus is ParkingSessionStatus.Exited or ParkingSessionStatus.Void or ParkingSessionStatus.Cancelled)
+                        {
+                            // The session is already closed, so an old checkout must
+                            // not remain payable indefinitely or inflate operations
+                            // alerts. The provider status was read successfully and
+                            // is not paid, so it is safe to expire and close locally.
+                            await _gateway.ExpireCheckoutAsync(payment.TenantId, payment.ProviderCheckoutSessionId!, ct);
+                            payment.Cancel();
+                            abandoned.Add(payment);
+                            failed++;
+                        }
+                        // Otherwise leave it open for the next sweep.
+                        break;
                 }
             }
             catch (Exception ex)

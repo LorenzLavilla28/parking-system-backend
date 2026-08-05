@@ -46,6 +46,7 @@ public static class DependencyInjection
 
         // Payments (Phase 4).
         services.AddScoped<IPaymentSettler, PaymentSettler>();
+        services.AddScoped<IPaymentCheckoutCleanupService, PaymentCheckoutCleanupService>();
         services.AddScoped<ICustomerPaymentService, CustomerPaymentService>();
         services.AddScoped<IPaymentWebhookService, PaymentWebhookService>();
         services.AddScoped<IPaymentReconciliationService, PaymentReconciliationService>();

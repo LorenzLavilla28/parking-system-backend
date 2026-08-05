@@ -16,6 +16,12 @@ public sealed class DashboardController : ApiControllerBase
     public DashboardController(IDashboardReportService reports) => _reports = reports;
 
     [HttpGet]
-    public async Task<IActionResult> Get([FromQuery] int days = 7, CancellationToken ct = default)
-        => Ok(ApiResponse<DashboardReportResponse>.Ok(await _reports.GetAsync(days, ct)));
+    public async Task<IActionResult> Get(
+        [FromQuery] int days = 7,
+        [FromQuery] Guid? locationId = null,
+        [FromQuery] DateTimeOffset? from = null,
+        [FromQuery] DateTimeOffset? to = null,
+        CancellationToken ct = default)
+        => Ok(ApiResponse<DashboardReportResponse>.Ok(
+            await _reports.GetAsync(days, locationId, from, to, ct)));
 }

@@ -62,6 +62,7 @@ public static class EmailTemplates
               {{deadlineRow}}
             </table>
             <p style="color:#64748b;font-size:13px">Keep this receipt for your records.</p>
+            <p style="color:#475569;font-size:13px">To request a sales invoice, please forward this email to <a href="mailto:info@julicis.com">info@julicis.com</a>.</p>
             """);
 
         var text = new StringBuilder()
@@ -72,6 +73,8 @@ public static class EmailTemplates
             .AppendLine($"Paid at: {paidAt}")
             .AppendLine($"Method: {d.PaymentMethod ?? "online"}")
             .AppendLine($"Reference: {d.Reference}")
+            .AppendLine()
+            .AppendLine("To request a sales invoice, please forward this email to info@julicis.com.")
             .ToString();
 
         return EmailMessage.Create(EmailKind.PaymentReceipt, toEmail, null, subject, html, text, now, tenantId, maxAttempts);

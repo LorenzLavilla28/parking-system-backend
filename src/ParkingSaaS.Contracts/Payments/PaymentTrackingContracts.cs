@@ -46,6 +46,31 @@ public sealed record PaymentSummaryResponse(
     decimal TotalPaid,
     DateTimeOffset? PaidExitDeadline);
 
+public sealed class PaymentOverrideQueryRequest
+{
+    public Guid? LocationId { get; init; }
+    public DateTimeOffset? From { get; init; }
+    public DateTimeOffset? To { get; init; }
+    public int PageSize { get; init; } = 10;
+
+    public int NormalizedPageSize => PageSize is < 1 or > 100 ? 10 : PageSize;
+}
+
+public sealed record PaymentOverrideResponse(
+    Guid Id,
+    Guid ParkingSessionId,
+    Guid ParkingLocationId,
+    string LocationName,
+    string PlateNumberRaw,
+    string Action,
+    string Label,
+    string Reason,
+    string PerformedBy,
+    DateTimeOffset CreatedAt,
+    decimal? FeeOverride,
+    decimal? FinalFee,
+    decimal TotalPaid);
+
 public sealed record PaymentAuditResponse(
     Guid Id,
     DateTimeOffset CreatedAt,

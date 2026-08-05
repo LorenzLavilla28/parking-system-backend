@@ -12,10 +12,17 @@ public sealed record DashboardSummaryResponse(
     int PaidAwaitingExit,
     int UnpaidSessions,
     int OverGraceSessions,
+    decimal OverGraceAmount,
     int TodayEntries,
     int TodayExits,
     decimal TodayRevenue,
-    string Currency);
+    string Currency,
+    int PeriodEntries,
+    int PeriodExits,
+    decimal PeriodRevenue,
+    double AverageDurationMinutes,
+    decimal PreviousPeriodRevenue,
+    int SupervisorOverrides);
 
 public sealed record RevenuePointResponse(
     DateTimeOffset Date,

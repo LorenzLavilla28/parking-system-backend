@@ -28,4 +28,27 @@ public sealed class EmailTemplateTests
         email.HtmlBody.Should().Contain("data:image/png;base64,qr-data");
         email.TextBody.Should().Contain("Review and pay: https://parking.test/p/session-token");
     }
+
+    [Fact]
+    public void Payment_receipt_contains_sales_invoice_request_instructions()
+    {
+        var email = EmailTemplates.PaymentReceipt(
+            Guid.NewGuid(),
+            "customer@example.com",
+            new PaymentReceiptEmailData(
+                "ABC1234",
+                "Main Street Parking",
+                180m,
+                "PHP",
+                new DateTimeOffset(2026, 8, 6, 10, 0, 0, TimeSpan.Zero),
+                "gcash",
+                "PAY-123",
+                null),
+            new DateTimeOffset(2026, 8, 6, 10, 1, 0, TimeSpan.Zero),
+            3);
+
+        email.HtmlBody.Should().Contain("mailto:info@julicis.com");
+        email.HtmlBody.Should().Contain("To request a sales invoice");
+        email.TextBody.Should().Contain("To request a sales invoice, please forward this email to info@julicis.com.");
+    }
 }

@@ -1,7 +1,11 @@
+using System.Text.Json.Serialization;
+
 namespace ParkingSaaS.Contracts.Common;
 
 /// <summary>Standard success envelope: <c>{ data, meta }</c>.</summary>
-public sealed record ApiResponse<T>(T Data, object? Meta = null)
+public sealed record ApiResponse<T>(
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.Never)] T Data,
+    object? Meta = null)
 {
     public static ApiResponse<T> Ok(T data, object? meta = null) => new(data, meta);
 }

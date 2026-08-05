@@ -171,3 +171,14 @@ public sealed class FakePaymentGateway : IPaymentGateway
     public Task<WebhookVerificationResult> VerifyWebhookAsync(Guid tenantId, string rawPayload, string signatureHeader, CancellationToken ct)
         => VerifyWebhookAsync(rawPayload, signatureHeader, ct);
 }
+
+public sealed class FakePaymentCheckoutCleanupService : IPaymentCheckoutCleanupService
+{
+    public List<Guid> SessionIds { get; } = new();
+
+    public Task CloseOpenCheckoutsAsync(Guid sessionId, CancellationToken cancellationToken)
+    {
+        SessionIds.Add(sessionId);
+        return Task.CompletedTask;
+    }
+}

@@ -12,6 +12,9 @@ namespace ParkingSaaS.Application.Payments;
 
 public sealed class PaymentTrackingService : IPaymentTrackingService
 {
+    private static readonly string[] PaymentOverrideActions =
+        ["MarkedComplimentary", "OutstandingWaived", "ExitApprovedWithOverride"];
+
     private readonly IApplicationDbContext _db;
     private readonly ISessionPricingService _pricing;
     private readonly IDateTime _clock;
@@ -35,6 +38,74 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
 
         return new PagedResult<PaymentSummaryResponse>(
             rows.Select(ToContract).ToArray(), request.NormalizedPage, request.NormalizedPageSize, total);
+    }
+
+    public async Task<IReadOnlyList<PaymentOverrideResponse>> ListOverridesAsync(
+        PaymentOverrideQueryRequest request,
+        CancellationToken ct)
+    {
+        var query = _db.AuditLogs.AsNoTracking()
+            .Where(a => a.EntityType == nameof(ParkingSession) && PaymentOverrideActions.Contains(a.Action));
+        if (request.From is { } from)
+            query = query.Where(a => a.CreatedAt >= from);
+        if (request.To is { } to)
+            query = query.Where(a => a.CreatedAt < to);
+        if (request.LocationId is { } locationId)
+            query = query.Where(a => a.ParkingLocationId == locationId);
+
+        var audits = await query
+            .OrderByDescending(a => a.CreatedAt)
+            .Take(request.NormalizedPageSize)
+            .ToListAsync(ct);
+        var keyedAudits = audits
+            .Select(a => new { Audit = a, Parsed = Guid.TryParse(a.EntityId, out var sessionId), SessionId = sessionId })
+            .Where(x => x.Parsed)
+            .ToArray();
+        var sessionIds = keyedAudits.Select(x => x.SessionId).Distinct().ToArray();
+        var sessions = await _db.ParkingSessions.AsNoTracking()
+            .Where(s => sessionIds.Contains(s.Id))
+            .ToDictionaryAsync(s => s.Id, ct);
+        var locationIds = sessions.Values.Select(s => s.ParkingLocationId).Distinct().ToArray();
+        var locations = await _db.ParkingLocations.AsNoTracking()
+            .Where(l => locationIds.Contains(l.Id))
+            .ToDictionaryAsync(l => l.Id, ct);
+        var userIds = keyedAudits
+            .Where(x => x.Audit.UserId.HasValue)
+            .Select(x => x.Audit.UserId!.Value)
+            .Distinct()
+            .ToArray();
+        var users = await _db.Users.AsNoTracking()
+            .Where(u => userIds.Contains(u.Id))
+            .Select(u => new { u.Id, u.FirstName, u.LastName })
+            .ToDictionaryAsync(u => u.Id, ct);
+
+        return keyedAudits
+            .Where(x => sessions.ContainsKey(x.SessionId))
+            .Select(x =>
+            {
+                var session = sessions[x.SessionId];
+                var locationName = locations.TryGetValue(session.ParkingLocationId, out var location)
+                    ? location.Name
+                    : "Unknown location";
+                var performedBy = x.Audit.UserId is { } userId && users.TryGetValue(userId, out var user)
+                    ? $"{user.FirstName} {user.LastName}".Trim()
+                    : "System";
+                return new PaymentOverrideResponse(
+                    x.Audit.Id,
+                    session.Id,
+                    session.ParkingLocationId,
+                    locationName,
+                    session.PlateNumberRaw,
+                    x.Audit.Action,
+                    OverrideLabel(x.Audit.Action),
+                    x.Audit.Reason ?? "No reason recorded",
+                    performedBy,
+                    x.Audit.CreatedAt,
+                    session.FeeOverride,
+                    session.FinalFee,
+                    session.TotalPaid);
+            })
+            .ToArray();
     }
 
     public async Task<PaymentDetailResponse> GetAsync(Guid id, CancellationToken ct)
@@ -134,6 +205,8 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
             query = query.Where(p => p.ParkingSessionId == sessionId);
         if (Enum.TryParse<PaymentStatus>(request.Status, true, out var status))
             query = query.Where(p => p.Status == status);
+        else
+            query = query.Where(p => p.Status != PaymentStatus.Cancelled);
         if (Enum.TryParse<PaymentProvider>(request.Provider, true, out var provider))
             query = query.Where(p => p.Provider == provider);
         if (!string.IsNullOrWhiteSpace(request.PaymentMethod))
@@ -250,6 +323,14 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
         if (at <= 1) return "•••" + (at > 0 ? email[at..] : string.Empty);
         return email[0] + "•••" + email[(at - 1)..];
     }
+
+    private static string OverrideLabel(string action) => action switch
+    {
+        "MarkedComplimentary" => "Complimentary parking",
+        "OutstandingWaived" => "Outstanding balance waived",
+        "ExitApprovedWithOverride" => "Exit approved with override",
+        _ => "Supervisor override"
+    };
 
     private static string Csv(object? value)
     {

@@ -41,6 +41,9 @@ public sealed class TenantBrandingController : ApiControllerBase
     public async Task<IActionResult> DownloadLogo(CancellationToken ct)
     {
         var logo = await _branding.DownloadCurrentLogoAsync(ct);
+        if (logo is null)
+            return NoContent();
+
         return File(logo.Content, logo.ContentType, enableRangeProcessing: false);
     }
 

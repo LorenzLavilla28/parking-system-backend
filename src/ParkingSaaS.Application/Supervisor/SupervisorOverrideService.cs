@@ -4,6 +4,7 @@ using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Audit;
 using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Application.Guard;
+using ParkingSaaS.Application.Payments;
 using ParkingSaaS.Contracts.Realtime;
 using ParkingSaaS.Contracts.Supervisor;
 using ParkingSaaS.Domain.Sessions;
@@ -24,11 +25,13 @@ public sealed class SupervisorOverrideService : ISupervisorOverrideService
     private readonly IAuditLogger _audit;
     private readonly IDateTime _clock;
     private readonly ISessionRealtimeNotifier _realtime;
+    private readonly IPaymentCheckoutCleanupService _checkoutCleanup;
     private readonly ILogger<SupervisorOverrideService> _logger;
 
     public SupervisorOverrideService(
         IApplicationDbContext db, ICurrentUser user, IPlateNormalizer plateNormalizer,
-        IAuditLogger audit, IDateTime clock, ISessionRealtimeNotifier realtime, ILogger<SupervisorOverrideService> logger)
+        IAuditLogger audit, IDateTime clock, ISessionRealtimeNotifier realtime,
+        IPaymentCheckoutCleanupService checkoutCleanup, ILogger<SupervisorOverrideService> logger)
     {
         _db = db;
         _user = user;
@@ -36,6 +39,7 @@ public sealed class SupervisorOverrideService : ISupervisorOverrideService
         _audit = audit;
         _clock = clock;
         _realtime = realtime;
+        _checkoutCleanup = checkoutCleanup;
         _logger = logger;
     }
 
@@ -97,6 +101,11 @@ public sealed class SupervisorOverrideService : ISupervisorOverrideService
 
         // Supervisors/admins may act on any location in their tenant.
         await GuardLocationAccess.EnsureCanOperateAsync(_db, _user, session.ParkingLocationId, ct);
+
+        // Complimentary, waived, and voided sessions are no longer payable.
+        // Close any existing online checkout before applying the override.
+        if (action is "SessionVoided" or "MarkedComplimentary" or "OutstandingWaived")
+            await _checkoutCleanup.CloseOpenCheckoutsAsync(session.Id, ct);
 
         var before = Snapshot(session);
         await mutate(session, ct);

@@ -11,6 +11,9 @@ public sealed class ApproveExitRequestValidator : AbstractValidator<ApproveExitR
         RuleFor(x => x.ExitPhotoUrl).MaximumLength(1000);
         RuleFor(x => x.DeviceInformation).MaximumLength(256);
         RuleFor(x => x.OverrideReason).MaximumLength(500);
+        RuleFor(x => x.CashPaymentAmount)
+            .GreaterThanOrEqualTo(0m)
+            .When(x => x.CashPaymentAmount.HasValue);
     }
 }
 

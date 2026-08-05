@@ -23,7 +23,8 @@ public sealed record ApproveExitRequest(
     Guid SessionId,
     string? ExitPhotoUrl,
     string? DeviceInformation,
-    string? OverrideReason);
+    string? OverrideReason,
+    decimal? CashPaymentAmount = null);
 
 public sealed record ExitApprovedResponse(
     Guid SessionId,

@@ -56,24 +56,66 @@ public sealed class OperationsSummaryService : IOperationsSummaryService
         var end = _clock.UtcNow;
         var start = end.AddHours(-NormalizeHours(hours));
         var recipients = await QueueForTenantAsync(tenantId, start, end, ct);
+        var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId, ct)
+            ?? throw new NotFoundException("Tenant not found.");
+        tenant.MarkOperationsSummaryRun(end);
         await _db.SaveChangesAsync(ct);
         return new OperationsSummaryEmailResponse(recipients, start, end);
     }
 
-    public async Task<int> QueueScheduledEmailsAsync(int hours, CancellationToken ct)
+    public async Task<OperationsSummarySettingsResponse> GetSettingsAsync(CancellationToken ct)
+    {
+        var tenantId = _tenant.TenantId;
+        if (tenantId == Guid.Empty)
+            throw new NotFoundException("Tenant context not found.");
+
+        var tenant = await _db.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == tenantId, ct)
+            ?? throw new NotFoundException("Tenant not found.");
+        return ToSettings(tenant);
+    }
+
+    public async Task<OperationsSummarySettingsResponse> UpdateSettingsAsync(
+        UpdateOperationsSummarySettingsRequest request,
+        CancellationToken ct)
+    {
+        var tenantId = _tenant.TenantId;
+        if (tenantId == Guid.Empty)
+            throw new NotFoundException("Tenant context not found.");
+
+        var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId, ct)
+            ?? throw new NotFoundException("Tenant not found.");
+        tenant.ConfigureOperationsSummary(request.Enabled, request.IntervalHours, _clock.UtcNow);
+        await _db.SaveChangesAsync(ct);
+        return ToSettings(tenant);
+    }
+
+    public async Task<int> QueueScheduledEmailsAsync(CancellationToken ct)
     {
         var end = _clock.UtcNow;
-        var start = end.AddHours(-NormalizeHours(hours));
-        var tenantIds = await _db.Tenants.IgnoreQueryFilters()
-            .Where(t => t.Status == TenantStatus.Active)
-            .Select(t => t.Id)
+        var tenants = await _db.Tenants.IgnoreQueryFilters()
+            .Where(t => t.Status == TenantStatus.Active && t.OperationsSummaryEnabled)
             .ToListAsync(ct);
 
         var queued = 0;
-        foreach (var tenantId in tenantIds)
-            queued += await QueueForTenantAsync(tenantId, start, end, ct);
+        var ran = false;
+        foreach (var tenant in tenants)
+        {
+            var hours = NormalizeHours(tenant.OperationsSummaryIntervalHours);
+            if (tenant.OperationsSummaryLastRunAt is not { } lastRun)
+            {
+                tenant.MarkOperationsSummaryRun(end);
+                ran = true;
+                continue;
+            }
+            if (lastRun.AddHours(hours) > end)
+                continue;
 
-        if (queued > 0)
+            queued += await QueueForTenantAsync(tenant.Id, end.AddHours(-hours), end, ct);
+            tenant.MarkOperationsSummaryRun(end);
+            ran = true;
+        }
+
+        if (ran)
             await _db.SaveChangesAsync(ct);
         return queued;
     }
@@ -144,11 +186,21 @@ public sealed class OperationsSummaryService : IOperationsSummaryService
             .Where(p => p.TenantId == tenantId
                         && ((p.CreatedAt >= start && p.CreatedAt < end)
                             || (p.PaidAt >= start && p.PaidAt < end)))
-            .Select(p => new PaymentRow(p.Status, p.Amount, p.PaidAt))
+            .Select(p => new PaymentRow(
+                p.Status,
+                p.Amount,
+                p.PaidAt,
+                _db.ParkingSessions.Any(s => s.Id == p.ParkingSessionId && (
+                    s.Status == ParkingSessionStatus.ActiveUnpaid
+                    || s.Status == ParkingSessionStatus.PaymentPending
+                    || s.Status == ParkingSessionStatus.PaidExitWindow
+                    || s.Status == ParkingSessionStatus.OverstayDue))))
             .ToListAsync(ct);
 
         var paid = payments.Where(p => p.Status == PaymentStatus.Paid && p.PaidAt >= start && p.PaidAt < end).ToArray();
-        var pending = payments.Where(p => p.Status is PaymentStatus.Pending or PaymentStatus.Processing).ToArray();
+        // Pending checkouts attached to exited/voided sessions remain visible in
+        // Payments for audit purposes, but are not live operational work.
+        var pending = payments.Where(p => p.IsActiveSession && (p.Status is PaymentStatus.Pending or PaymentStatus.Processing)).ToArray();
         var failed = payments.Where(p => p.Status is PaymentStatus.Failed or PaymentStatus.Expired or PaymentStatus.Cancelled).ToArray();
         var failedWebhooks = await _db.WebhookEvents.IgnoreQueryFilters()
             .CountAsync(w => w.TenantId == tenantId
@@ -194,5 +246,8 @@ public sealed class OperationsSummaryService : IOperationsSummaryService
 
     private static int NormalizeHours(int hours) => Math.Clamp(hours, 1, 24);
 
-    private sealed record PaymentRow(PaymentStatus Status, decimal Amount, DateTimeOffset? PaidAt);
+    private static OperationsSummarySettingsResponse ToSettings(Tenant tenant)
+        => new(tenant.OperationsSummaryEnabled, tenant.OperationsSummaryIntervalHours);
+
+    private sealed record PaymentRow(PaymentStatus Status, decimal Amount, DateTimeOffset? PaidAt, bool IsActiveSession);
 }

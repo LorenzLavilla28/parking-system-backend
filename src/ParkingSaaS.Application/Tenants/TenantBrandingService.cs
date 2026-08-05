@@ -93,10 +93,13 @@ public sealed class TenantBrandingService : ITenantBrandingService
         await DeleteQuietlyAsync(oldKey, ct);
     }
 
-    public async Task<TenantLogoDownload> DownloadCurrentLogoAsync(CancellationToken ct)
+    public async Task<TenantLogoDownload?> DownloadCurrentLogoAsync(CancellationToken ct)
     {
         var tenant = await CurrentTenantAsync(ct);
-        return await DownloadAsync(tenant.LogoObjectKey, tenant.LogoContentType, ct);
+        if (string.IsNullOrWhiteSpace(tenant.LogoObjectKey))
+            return null;
+
+        return await _storage.GetAsync(tenant.LogoObjectKey, ct);
     }
 
     public async Task<TenantLogoDownload> DownloadLogoForLocationAsync(string locationSlug, CancellationToken ct)

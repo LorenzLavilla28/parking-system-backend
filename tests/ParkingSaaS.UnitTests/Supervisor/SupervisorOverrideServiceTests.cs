@@ -23,6 +23,7 @@ public sealed class SupervisorOverrideServiceTests
     private readonly FakeCurrentUser _user;
     private readonly TestClock _clock = new(new DateTimeOffset(2026, 6, 24, 18, 0, 0, TimeSpan.Zero));
     private readonly FakeSessionRealtimeNotifier _realtime = new();
+    private readonly FakePaymentCheckoutCleanupService _checkoutCleanup = new();
     private readonly AppDbContext _db;
     private readonly SupervisorOverrideService _service;
     private ParkingLocation _location = null!;
@@ -33,7 +34,7 @@ public sealed class SupervisorOverrideServiceTests
         _user = new FakeCurrentUser { TenantId = _tenantId, UserId = Guid.NewGuid(), Roles = new[] { RoleType.Supervisor } };
         _db = InMemoryDb.Create(_tenant);
         var audit = new AuditLogger(_db, _user, _clock);
-        _service = new SupervisorOverrideService(_db, _user, new PlateNormalizer(), audit, _clock, _realtime, NullLogger<SupervisorOverrideService>.Instance);
+        _service = new SupervisorOverrideService(_db, _user, new PlateNormalizer(), audit, _clock, _realtime, _checkoutCleanup, NullLogger<SupervisorOverrideService>.Instance);
 
         _location = new ParkingLocation(_tenantId, "Lot", "lot", "Asia/Manila", null);
         _db.ParkingLocations.Add(_location);

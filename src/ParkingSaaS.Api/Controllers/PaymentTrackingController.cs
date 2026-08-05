@@ -23,6 +23,10 @@ public sealed class PaymentTrackingController : ApiControllerBase
     public async Task<IActionResult> Export([FromQuery] PaymentQueryRequest request, CancellationToken ct)
         => File(await _payments.ExportCsvAsync(request, ct), "text/csv", $"payments-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv");
 
+    [HttpGet("overrides")]
+    public async Task<IActionResult> Overrides([FromQuery] PaymentOverrideQueryRequest request, CancellationToken ct)
+        => Ok(ApiResponse<IReadOnlyList<PaymentOverrideResponse>>.Ok(await _payments.ListOverridesAsync(request, ct)));
+
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> Get(Guid id, CancellationToken ct)
         => Ok(ApiResponse<PaymentDetailResponse>.Ok(await _payments.GetAsync(id, ct)));

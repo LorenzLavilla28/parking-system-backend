@@ -150,8 +150,12 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
         var credentials = await GetCredentialsAsync(tenantId, ct);
         using var response = await _http.SendAsync(
             CreateRequest(HttpMethod.Post, $"checkout_sessions/{providerReference}/expire", credentials), ct);
-        if (!response.IsSuccessStatusCode)
-            _logger.LogWarning("PayMongo expire checkout returned {Status} for {Ref}.", (int)response.StatusCode, providerReference);
+        if (response.IsSuccessStatusCode || (int)response.StatusCode == 404)
+            return;
+
+        var detail = await response.Content.ReadAsStringAsync(ct);
+        _logger.LogError("PayMongo expire checkout failed with {Status} for {Ref}.", (int)response.StatusCode, providerReference);
+        throw new InvalidOperationException($"PayMongo expire checkout failed ({(int)response.StatusCode}): {detail}");
     }
 
     public Task<WebhookVerificationResult> VerifyWebhookAsync(string rawPayload, string signatureHeader, CancellationToken ct)

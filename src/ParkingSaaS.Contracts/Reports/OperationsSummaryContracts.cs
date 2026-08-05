@@ -35,3 +35,11 @@ public sealed record OperationsSummaryEmailResponse(
     int RecipientsQueued,
     DateTimeOffset PeriodStart,
     DateTimeOffset PeriodEnd);
+
+public sealed record OperationsSummarySettingsResponse(
+    bool Enabled,
+    int IntervalHours);
+
+public sealed record UpdateOperationsSummarySettingsRequest(
+    bool Enabled,
+    int IntervalHours);

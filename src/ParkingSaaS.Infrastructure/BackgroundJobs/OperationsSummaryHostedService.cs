@@ -35,9 +35,9 @@ public sealed class OperationsSummaryHostedService : BackgroundService
             return;
         }
 
-        var hours = Math.Clamp(_options.OperationsSummaryIntervalHours, 1, 24);
-        var interval = TimeSpan.FromHours(hours);
-        _logger.LogInformation("Operations summary scheduler running every {Interval}.", interval);
+        var sweepMinutes = Math.Clamp(_options.OperationsSummarySweepMinutes, 1, 60);
+        var interval = TimeSpan.FromMinutes(sweepMinutes);
+        _logger.LogInformation("Operations summary scheduler checking tenant schedules every {Interval}.", interval);
 
         using var timer = new PeriodicTimer(interval);
         while (await timer.WaitForNextTickAsync(stoppingToken))
@@ -46,7 +46,7 @@ public sealed class OperationsSummaryHostedService : BackgroundService
             {
                 using var scope = _scopeFactory.CreateScope();
                 var summaries = scope.ServiceProvider.GetRequiredService<IOperationsSummaryService>();
-                var queued = await summaries.QueueScheduledEmailsAsync(hours, stoppingToken);
+                var queued = await summaries.QueueScheduledEmailsAsync(stoppingToken);
                 _logger.LogInformation("Operations summary scheduler queued {Recipients} recipient email(s).", queued);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

@@ -160,6 +160,13 @@ public sealed class GuardSessionService : IGuardSessionService
     {
         var result = await _pricing.CalculateAsync(s, now, discount: null, ct);
         var calculatedFee = result?.TotalAmount ?? 0m;
+        var closedFee = s.Status is ParkingSessionStatus.Exited or ParkingSessionStatus.Void or ParkingSessionStatus.Cancelled
+                        ? s.FinalFee
+                        : null;
+        var effectiveFee = closedFee ?? (s.Status is ParkingSessionStatus.Void or ParkingSessionStatus.Cancelled
+            ? 0m
+            : s.EffectiveFee(calculatedFee));
+        var outstanding = Math.Max(0m, effectiveFee - s.TotalPaid);
         return new SessionSummaryResponse(
             s.Id,
             s.ParkingLocationId,
@@ -171,8 +178,8 @@ public sealed class GuardSessionService : IGuardSessionService
             s.EffectiveStatus(now, calculatedFee).ToString(),
             result is not null,
             result?.Currency ?? "PHP",
-            s.EffectiveFee(calculatedFee),
-            s.Outstanding(calculatedFee),
+            effectiveFee,
+            outstanding,
             s.FinalFee,
             s.TotalPaid,
             s.PaidExitDeadline);

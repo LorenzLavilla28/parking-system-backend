@@ -101,6 +101,22 @@ public sealed class PaymentReconciliationServiceTests
     }
 
     [Fact]
+    public async Task Pending_payment_for_closed_session_is_expired_and_closed()
+    {
+        var payment = SeedPendingPayment();
+        var session = await _db.ParkingSessions.IgnoreQueryFilters().SingleAsync();
+        session.ApproveExit(Guid.NewGuid(), _clock.UtcNow, 90m, null);
+        await _db.SaveChangesAsync();
+        _gateway.StatusResult = new PaymentStatusResult(PaymentStatus.Pending, null, null, null, null);
+
+        var summary = await _service.ReconcileAsync(CancellationToken.None);
+
+        summary.PaymentsFailed.Should().Be(1);
+        payment.Status.Should().Be(PaymentStatus.Cancelled);
+        _gateway.ExpireCalls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task Expired_checkout_reverts_the_session_to_unpaid_so_it_can_be_paid_again()
     {
         SeedPendingPayment();

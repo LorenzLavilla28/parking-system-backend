@@ -22,5 +22,8 @@ public sealed class TenantConfiguration : IEntityTypeConfiguration<Tenant>
         b.Property(t => t.DefaultTimezone).HasMaxLength(64).IsRequired();
         b.Property(t => t.LogoObjectKey).HasMaxLength(300);
         b.Property(t => t.LogoContentType).HasMaxLength(64);
+        b.Property(t => t.OperationsSummaryEnabled).IsRequired().HasDefaultValue(true);
+        b.Property(t => t.OperationsSummaryIntervalHours).IsRequired().HasDefaultValue(3);
+        b.Property(t => t.OperationsSummaryLastRunAt);
     }
 }

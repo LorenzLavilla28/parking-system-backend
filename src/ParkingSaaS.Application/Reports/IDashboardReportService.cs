@@ -4,5 +4,10 @@ namespace ParkingSaaS.Application.Reports;
 
 public interface IDashboardReportService
 {
-    Task<DashboardReportResponse> GetAsync(int days, CancellationToken ct);
+    Task<DashboardReportResponse> GetAsync(
+        int days,
+        Guid? parkingLocationId,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        CancellationToken ct);
 }
