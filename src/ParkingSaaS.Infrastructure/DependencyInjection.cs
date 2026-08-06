@@ -15,6 +15,7 @@ using ParkingSaaS.Infrastructure.Identity;
 using ParkingSaaS.Infrastructure.Payments.PayMongo;
 using ParkingSaaS.Infrastructure.Persistence;
 using ParkingSaaS.Infrastructure.Persistence.Interceptors;
+using ParkingSaaS.Infrastructure.Scanning;
 using ParkingSaaS.Infrastructure.Security;
 using ParkingSaaS.Infrastructure.Sessions;
 using ParkingSaaS.Infrastructure.Tenancy;
@@ -32,6 +33,18 @@ public static class DependencyInjection
         services.AddOptions<PasswordResetOptions>().Bind(configuration.GetSection(PasswordResetOptions.SectionName));
         services.AddOptions<PublicUrlOptions>().Bind(configuration.GetSection(PublicUrlOptions.SectionName));
         services.AddOptions<LookupThrottleOptions>().Bind(configuration.GetSection(LookupThrottleOptions.SectionName));
+        services.AddOptions<PlateScanningOptions>()
+            .Bind(configuration.GetSection(PlateScanningOptions.SectionName))
+            .Validate(o => o.ConfidenceThreshold is >= 0 and <= 1, "PlateScanning:ConfidenceThreshold must be between 0 and 1.")
+            .Validate(o => o.IouThreshold is >= 0 and <= 1, "PlateScanning:IouThreshold must be between 0 and 1.")
+            .Validate(o => o.CropPaddingRatio is >= 0 and <= 1, "PlateScanning:CropPaddingRatio must be between 0 and 1.")
+            .Validate(o => o.MinimumCropAspectRatio is >= 1 and <= 8, "PlateScanning:MinimumCropAspectRatio must be between 1 and 8.")
+            .Validate(o => o.OcrConfidenceThreshold is >= 0 and <= 1, "PlateScanning:OcrConfidenceThreshold must be between 0 and 1.")
+            .Validate(o => o.MaxImageBytes is > 0 and <= 25 * 1024 * 1024, "PlateScanning:MaxImageBytes must be between 1 byte and 25 MiB.")
+            .Validate(o => o.MaxImageDimension is >= 640 and <= 4096, "PlateScanning:MaxImageDimension must be between 640 and 4096 pixels.")
+            .Validate(o => o.MaxConcurrentScans is >= 1 and <= 4, "PlateScanning:MaxConcurrentScans must be between 1 and 4.")
+            .Validate(o => o.MaxQueuedScans is >= 0 and <= 20, "PlateScanning:MaxQueuedScans must be between 0 and 20.")
+            .ValidateOnStart();
         services.AddOptions<PricingOptions>().Bind(configuration.GetSection(PricingOptions.SectionName));
         services.AddOptions<PayMongoOptions>().Bind(configuration.GetSection(PayMongoOptions.SectionName));
         services.AddOptions<AwsSecretsOptions>().Bind(configuration.GetSection(AwsSecretsOptions.SectionName));
@@ -76,6 +89,8 @@ public static class DependencyInjection
 
         // Plate normalization is a pure domain service with no dependencies.
         services.AddSingleton<IPlateNormalizer, PlateNormalizer>();
+        services.AddSingleton<IPlateRegionDetector, YoloPlateRegionDetector>();
+        services.AddSingleton<IPlateTextRecognizer, PaddleOcrPlateTextRecognizer>();
 
         // Data Protection keys must persist so reprintable tokens survive restarts.
         // In AWS, point this at an EFS mount or back it with S3/KMS.

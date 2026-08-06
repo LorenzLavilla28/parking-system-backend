@@ -21,6 +21,12 @@ RUN mkdir -p /app/dp-keys
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
+# Paddle Inference uses OpenMP for CPU inference. The OpenCV slim runtime and
+# Paddle/OpenBLAS native libraries are supplied by NuGet packages.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # .NET Linux images include the non-root `app` user (UID 1654).
 COPY --chown=1654:1654 --from=build /app .
 USER 1654

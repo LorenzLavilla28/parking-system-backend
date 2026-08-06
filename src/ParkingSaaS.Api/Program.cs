@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using ParkingSaaS.Api.Auth;
 using ParkingSaaS.Api.Middleware;
+using ParkingSaaS.Api.RateLimiting;
 using ParkingSaaS.Api.Realtime;
 using ParkingSaaS.Api.Validation;
 using ParkingSaaS.Application;
@@ -111,6 +112,29 @@ builder.Services.AddAuthorization(options => options.AddParkingPolicies());
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        var isPlateScan = context.HttpContext.Request.Path.StartsWithSegments("/api/guard/plate-scan");
+        if (isPlateScan)
+            context.HttpContext.Response.Headers.RetryAfter = "5";
+
+        await Results.Problem(
+                statusCode: StatusCodes.Status429TooManyRequests,
+                title: isPlateScan ? "Plate scanner is busy" : "Too many requests",
+                detail: isPlateScan
+                    ? "One scan is running and the scan queue is full. Try again shortly."
+                    : "The request limit has been exceeded. Try again shortly.")
+            .ExecuteAsync(context.HttpContext);
+    };
+
+    var plateScanning = builder.Configuration
+        .GetSection(PlateScanningOptions.SectionName)
+        .Get<PlateScanningOptions>() ?? new PlateScanningOptions();
+    options.AddPolicy(PlateScanRateLimitPolicy.Name, httpContext =>
+        RateLimitPartition.GetConcurrencyLimiter(
+            partitionKey: PlateScanRateLimitPolicy.Name,
+            partitionKey => PlateScanRateLimitPolicy.CreateOptions(plateScanning)));
+
     options.AddPolicy("auth", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",

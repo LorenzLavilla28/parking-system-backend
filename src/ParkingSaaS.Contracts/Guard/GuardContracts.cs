@@ -45,3 +45,14 @@ public sealed record SessionQrResponse(
     string TicketCode,
     string PaymentUrl,
     string QrCodeDataUri);
+
+public sealed record PlateScanBoundingBox(int Left, int Top, int Width, int Height);
+
+public sealed record PlateScanResponse(
+    bool Detected,
+    string? PlateNumber,
+    double? Confidence,
+    double? OcrConfidence,
+    PlateScanBoundingBox? BoundingBox,
+    int? ImageWidth,
+    int? ImageHeight);

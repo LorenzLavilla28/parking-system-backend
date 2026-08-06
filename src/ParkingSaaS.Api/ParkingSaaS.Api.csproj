@@ -24,4 +24,15 @@
     <ProjectReference Include="..\ParkingSaaS.Contracts\ParkingSaaS.Contracts.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="..\..\models\LicensePlateDetector_YOLOv8n.onnx" Link="Models\LicensePlateDetector_YOLOv8n.onnx">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="..\..\models\PaddleOCR\**\*" Link="Models\PaddleOCR\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>
