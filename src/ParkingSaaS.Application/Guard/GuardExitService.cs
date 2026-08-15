@@ -17,8 +17,8 @@ namespace ParkingSaaS.Application.Guard;
 /// Exit validation. The backend is the source of truth: the status banner and the
 /// approval both recompute the fee and outstanding balance server-side, never
 /// trusting the guard's screen. Exit is allowed only when nothing is outstanding.
-/// A supervisor override may release a regular unpaid session during an approved
-/// operational exception, but it never bypasses an overdue balance.
+/// A supervisor override may release an unpaid or overdue session during an
+/// approved operational exception.
 /// </summary>
 public sealed class GuardExitService : IGuardExitService
 {
@@ -81,12 +81,6 @@ public sealed class GuardExitService : IGuardExitService
 
         var outstanding = session.Outstanding(calculated);
         var finalFee = session.EffectiveFee(calculated);
-        var effectiveStatus = session.EffectiveStatus(now, calculated);
-
-        // Once the paid exit window has expired and the recalculated fee exceeds
-        // the amount already paid, the session requires a new payment.
-        if (effectiveStatus == ParkingSessionStatus.OverstayDue)
-            throw new ConflictException("This session is overdue. The outstanding balance must be paid before exit.");
 
         var hasOverride = !string.IsNullOrWhiteSpace(request.OverrideReason);
         var cashPaymentAmount = request.CashPaymentAmount ?? 0m;

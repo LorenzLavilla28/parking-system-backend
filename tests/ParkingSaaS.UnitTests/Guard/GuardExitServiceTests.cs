@@ -193,7 +193,7 @@ public sealed class GuardExitServiceTests
     }
 
     [Fact]
-    public async Task Overdue_session_cannot_be_forced_out_with_supervisor_override()
+    public async Task Supervisor_can_force_exit_an_overdue_session_with_an_override_reason()
     {
         var s = AddSession(totalPaid: 70m, deadline: _clock.UtcNow.AddMinutes(-1));
         _pricing.Result = FeeResults.Of(90m);
@@ -202,10 +202,13 @@ public sealed class GuardExitServiceTests
         status.Status.Should().Be(nameof(ParkingSessionStatus.OverstayDue));
         status.CanApproveExit.Should().BeFalse();
 
-        var act = async () => await _service.ApproveExitAsync(
+        var result = await _service.ApproveExitAsync(
             new ApproveExitRequest(s.Id, null, null, "manual release"), null, CancellationToken.None);
-        await act.Should().ThrowAsync<ConflictException>()
-            .WithMessage("This session is overdue. The outstanding balance must be paid before exit.");
+
+        result.Status.Should().Be(nameof(ParkingSessionStatus.Exited));
+        var audit = await _db.AuditLogs.SingleAsync();
+        audit.Action.Should().Be("ExitApprovedWithOverride");
+        audit.Reason.Should().Be("manual release");
     }
 
     [Fact]
