@@ -60,6 +60,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
                      .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray())),
         NotFoundException n => (StatusCodes.Status404NotFound, "Not found", n.Code, null),
         ConflictException c => (StatusCodes.Status409Conflict, "Conflict", c.Code, null),
+        TenantSuspendedException s => (StatusCodes.Status403Forbidden, "Tenant suspended", s.Code, null),
         ForbiddenException f => (StatusCodes.Status403Forbidden, "Forbidden", f.Code, null),
         UnauthorizedAppException u => (StatusCodes.Status401Unauthorized, "Unauthorized", u.Code, null),
         ThrottledException t => (StatusCodes.Status429TooManyRequests, "Too many requests", t.Code, null),

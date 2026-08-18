@@ -7,6 +7,7 @@ using ParkingSaaS.Contracts.Customer;
 using ParkingSaaS.Domain.Locations;
 using ParkingSaaS.Domain.Sessions;
 using ParkingSaaS.Domain.Services;
+using ParkingSaaS.Domain.Tenants;
 
 namespace ParkingSaaS.Application.Customer;
 
@@ -57,6 +58,9 @@ public sealed class CustomerPublicService : ICustomerPublicService
             .FirstOrDefaultAsync(l => l.Slug == normalizedSlug && l.Status == LocationStatus.Active, ct)
             ?? throw new NotFoundException("Parking location not found.");
 
+        if (!await IsTenantActiveAsync(location.TenantId, ct))
+            throw new NotFoundException("Parking location not found.");
+
         var hasLogo = await _db.Tenants
             .IgnoreQueryFilters()
             .AsNoTracking()
@@ -96,6 +100,12 @@ public sealed class CustomerPublicService : ICustomerPublicService
         if (location is null)
         {
             // Do not reveal whether the location exists.
+            _throttle.RegisterFailure(client.ClientKey);
+            return NotFound(decision);
+        }
+
+        if (!await IsTenantActiveAsync(location.TenantId, ct))
+        {
             _throttle.RegisterFailure(client.ClientKey);
             return NotFound(decision);
         }
@@ -185,4 +195,10 @@ public sealed class CustomerPublicService : ICustomerPublicService
 
     private static PlateLookupResponse NotFound(ThrottleDecision decision)
         => new("not_found", null, decision.CaptchaRequired);
+
+    private Task<bool> IsTenantActiveAsync(Guid tenantId, CancellationToken ct)
+        => _db.Tenants
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(t => t.Id == tenantId && t.Status == TenantStatus.Active, ct);
 }

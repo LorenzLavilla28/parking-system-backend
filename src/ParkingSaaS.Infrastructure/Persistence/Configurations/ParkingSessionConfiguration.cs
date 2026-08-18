@@ -20,7 +20,7 @@ public sealed class ParkingSessionConfiguration : IEntityTypeConfiguration<Parki
         b.Property(s => s.PlateNumberRaw).HasMaxLength(32).IsRequired();
         b.Property(s => s.PlateNumberNormalized).HasMaxLength(32).IsRequired();
         b.Property(s => s.VehicleType).HasConversion<string>().HasMaxLength(20);
-        b.Property(s => s.VehicleColor).HasMaxLength(40);
+        b.Property(s => s.Notes).HasMaxLength(500);
         b.Property(s => s.Status).HasConversion<string>().HasMaxLength(32);
 
         b.Property(s => s.PublicTokenHash).HasMaxLength(64).IsRequired();

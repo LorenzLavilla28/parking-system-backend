@@ -8,6 +8,7 @@ public sealed record ExitStatusResponse(
     Guid SessionId,
     string PlateNumberRaw,
     string VehicleType,
+    string? Notes,
     string Status,
     string Decision,
     bool PricingAvailable,

@@ -4,7 +4,7 @@ public sealed record RecordEntryRequest(
     Guid ParkingLocationId,
     string PlateNumber,
     string VehicleType,
-    string? VehicleColor,
+    string? Notes,
     string? EntryPhotoUrl);
 
 /// <summary>
@@ -28,7 +28,7 @@ public sealed record SessionSummaryResponse(
     string LocationName,
     string PlateNumberRaw,
     string VehicleType,
-    string? VehicleColor,
+    string? Notes,
     DateTimeOffset EntryTime,
     string Status,
     bool PricingAvailable,
@@ -38,6 +38,18 @@ public sealed record SessionSummaryResponse(
     decimal? FinalFee,
     decimal TotalPaid,
     DateTimeOffset? PaidExitDeadline);
+
+public sealed record SessionSearchResponse(
+    IReadOnlyList<SessionSummaryResponse> Items,
+    int Page,
+    int PageSize,
+    long TotalCount,
+    long AttentionCount,
+    long UnpaidCount,
+    long LongRunningCount)
+{
+    public int TotalPages => PageSize == 0 ? 0 : (int)Math.Ceiling(TotalCount / (double)PageSize);
+}
 
 /// <summary>Reprint/redisplay payload for an existing session's QR.</summary>
 public sealed record SessionQrResponse(

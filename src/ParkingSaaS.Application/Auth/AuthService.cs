@@ -6,6 +6,7 @@ using ParkingSaaS.Application.Common;
 using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Application.Common.Options;
 using ParkingSaaS.Contracts.Auth;
+using ParkingSaaS.Domain.Tenants;
 using ParkingSaaS.Domain.Users;
 
 namespace ParkingSaaS.Application.Auth;
@@ -92,6 +93,8 @@ public sealed class AuthService : IAuthService
             throw new UnauthorizedAppException();
         }
 
+        await EnsureTenantIsActiveAsync(user.TenantId, ct);
+
         if (needsRehash)
             user.SetPasswordHash(_passwordHasher.Hash(request.Password));
 
@@ -123,6 +126,8 @@ public sealed class AuthService : IAuthService
 
         if (user is null || !user.CanAuthenticate)
             throw new UnauthorizedAppException("Account is not active.");
+
+        await EnsureTenantIsActiveAsync(user.TenantId, ct);
 
         // Rotate: the presented token is consumed and chained to its replacement.
         var response = await IssueTokensAsync(user, ipAddress, now, ct);
@@ -156,6 +161,11 @@ public sealed class AuthService : IAuthService
         // Always return the same response so the endpoint cannot be used to
         // enumerate registered accounts.
         if (user is null)
+            return new PasswordResetResponse("If an account exists for that email, a password reset link has been sent.");
+
+        // Keep the response deliberately generic, but do not issue a reset link
+        // that could be used to prepare a suspended tenant account for access.
+        if (user.TenantId != Guid.Empty && await GetTenantStatusAsync(user.TenantId, ct) != TenantStatus.Active)
             return new PasswordResetResponse("If an account exists for that email, a password reset link has been sent.");
 
         var now = _clock.UtcNow;
@@ -204,6 +214,8 @@ public sealed class AuthService : IAuthService
         if (user is null || !user.CanAuthenticate)
             throw new UnauthorizedAppException("This password reset link is invalid or expired.");
 
+        await EnsureTenantIsActiveAsync(user.TenantId, ct);
+
         user.CompletePasswordChange(_passwordHasher.Hash(request.NewPassword));
         token.Consume(now);
         await RevokeActiveRefreshTokensAsync(user.Id, now, ct);
@@ -223,6 +235,8 @@ public sealed class AuthService : IAuthService
         if (!user.CanAuthenticate || !_passwordHasher.Verify(user.PasswordHash, request.CurrentPassword, out _))
             throw new UnauthorizedAppException("Current password is incorrect.");
 
+        await EnsureTenantIsActiveAsync(user.TenantId, ct);
+
         var now = _clock.UtcNow;
         user.CompletePasswordChange(_passwordHasher.Hash(request.NewPassword));
         await RevokeActiveRefreshTokensAsync(user.Id, now, ct);
@@ -235,12 +249,14 @@ public sealed class AuthService : IAuthService
     {
         var access = _jwt.CreateAccessToken(user);
 
-        var tenantName = await _db.Tenants
+        var tenant = await _db.Tenants
             .IgnoreQueryFilters()
             .Where(t => t.Id == user.TenantId)
-            .Select(t => t.Name)
-            .SingleOrDefaultAsync(ct)
-            ?? "Tenant workspace";
+            .Select(t => new { t.Name, t.Status })
+            .SingleOrDefaultAsync(ct);
+
+        var tenantName = tenant?.Name ?? "Tenant workspace";
+        var tenantStatus = tenant?.Status.ToString() ?? "Platform";
 
         var refreshValue = _refreshTokens.GenerateToken();
         var refreshExpiry = now.AddDays(_jwtOptions.RefreshTokenDays);
@@ -255,7 +271,8 @@ public sealed class AuthService : IAuthService
             user.FullName,
             user.Roles.Select(r => RoleNames.ToName(r.Role)).ToArray(),
             user.LocationAssignments.Select(a => a.ParkingLocationId).ToArray(),
-            user.MustChangePassword);
+            user.MustChangePassword,
+            tenantStatus);
 
         return new AuthResponse(access.Value, access.ExpiresAt, refreshValue, refreshExpiry, dto);
     }
@@ -267,6 +284,36 @@ public sealed class AuthService : IAuthService
             .Where(t => t.UserId == userId && t.RevokedAt == null)
             .ToListAsync(ct);
         foreach (var token in tokens) token.Revoke(now);
+    }
+
+    private async Task EnsureTenantIsActiveAsync(Guid tenantId, CancellationToken ct)
+    {
+        // Platform administrators use Guid.Empty and are intentionally outside
+        // tenant lifecycle enforcement.
+        if (tenantId == Guid.Empty)
+            return;
+
+        var status = await GetTenantStatusAsync(tenantId, ct);
+
+        if (status != TenantStatus.Active)
+        {
+            var message = status == TenantStatus.Archived
+                ? "This tenant membership is archived. Contact your platform administrator."
+                : "This tenant membership is suspended. Contact your platform administrator.";
+            throw new TenantSuspendedException(message);
+        }
+    }
+
+    private async Task<TenantStatus?> GetTenantStatusAsync(Guid tenantId, CancellationToken ct)
+    {
+        if (tenantId == Guid.Empty)
+            return null;
+
+        return await _db.Tenants
+            .IgnoreQueryFilters()
+            .Where(t => t.Id == tenantId)
+            .Select(t => (TenantStatus?)t.Status)
+            .SingleOrDefaultAsync(ct);
     }
 
     // A precomputed valid PBKDF2 hash of a random string, used only for timing parity.

@@ -14,6 +14,7 @@ public sealed class PaymentQueryRequest
     public DateTimeOffset? To { get; init; }
     public string? SortBy { get; init; }
     public string? SortDirection { get; init; }
+    public bool OverrideOnly { get; init; }
     public int Page { get; init; } = 1;
     public int PageSize { get; init; } = 25;
 
@@ -44,7 +45,11 @@ public sealed record PaymentSummaryResponse(
     DateTimeOffset? ExitTime,
     decimal? FinalFee,
     decimal TotalPaid,
-    DateTimeOffset? PaidExitDeadline);
+    DateTimeOffset? PaidExitDeadline,
+    decimal? CurrentFee = null,
+    decimal? CurrentOutstanding = null,
+    bool IsOverrideRelated = false,
+    string? OverrideLabel = null);
 
 public sealed class PaymentOverrideQueryRequest
 {

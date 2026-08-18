@@ -22,7 +22,11 @@ public sealed record DashboardSummaryResponse(
     decimal PeriodRevenue,
     double AverageDurationMinutes,
     decimal PreviousPeriodRevenue,
-    int SupervisorOverrides);
+    int SupervisorOverrides,
+    decimal OverrideCashRevenue,
+    int OverrideCashPaymentCount,
+    double OldestActiveSessionMinutes = 0d,
+    int MaximumCapacity = 0);
 
 public sealed record RevenuePointResponse(
     DateTimeOffset Date,
@@ -33,4 +37,6 @@ public sealed record PaymentMixResponse(
     string Key,
     string Label,
     decimal Amount,
-    int Count);
+    int Count,
+    decimal OverrideAmount = 0m,
+    int OverrideCount = 0);

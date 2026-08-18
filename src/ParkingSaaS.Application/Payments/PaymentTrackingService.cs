@@ -28,7 +28,7 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
 
     public async Task<PagedResult<PaymentSummaryResponse>> SearchAsync(PaymentQueryRequest request, CancellationToken ct)
     {
-        var query = BuildQuery(request);
+        var query = await BuildQueryAsync(request, ct);
         var total = await query.LongCountAsync(ct);
         var payments = await ApplyOrdering(query, request)
             .Skip((request.NormalizedPage - 1) * request.NormalizedPageSize)
@@ -121,6 +121,13 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
         var quote = payment.FeeQuoteId is { } quoteId
             ? await _db.FeeQuotes.AsNoTracking().FirstOrDefaultAsync(q => q.Id == quoteId, ct)
             : null;
+        var isOverrideRelated = await HasOverrideCashAuditAsync(payment.Id, ct);
+        var now = _clock.UtcNow;
+        var currentCalculation = session.ExitTime is null
+            ? await _pricing.CalculateAsync(session, now, discount: null, ct)
+            : null;
+        decimal? currentFee = currentCalculation?.TotalAmount;
+        decimal? currentOutstanding = currentCalculation is null ? null : session.Outstanding(currentCalculation.TotalAmount);
 
         var summary = ToContract(new PaymentProjection(
             payment.Id, payment.ParkingSessionId, session.ParkingLocationId, locationName,
@@ -128,7 +135,8 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
             payment.Amount, payment.Currency, payment.CreatedAt, payment.PaidAt,
             payment.ReceiptNumber, payment.ProviderCheckoutSessionId, payment.ProviderPaymentId,
             payment.CustomerEmail, payment.RecordedByGuardId, session.Status, session.EntryTime,
-            session.ExitTime, session.FinalFee, session.TotalPaid, session.PaidExitDeadline));
+            session.ExitTime, session.FinalFee, session.TotalPaid, session.PaidExitDeadline,
+            currentFee, currentOutstanding, isOverrideRelated, "Cash collected during override"));
 
         var audit = await _db.AuditLogs.AsNoTracking()
             .Where(a => a.EntityType == nameof(Payment) && a.EntityId == id.ToString())
@@ -146,12 +154,6 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
                 e.PaymentId, e.ReceivedAt, e.ProcessedAt, e.ProcessingStatus.ToString(), e.FailureReason))
             .ToListAsync(ct);
 
-        var now = _clock.UtcNow;
-        var currentCalculation = session.ExitTime is null
-            ? await _pricing.CalculateAsync(session, now, discount: null, ct)
-            : null;
-        decimal? currentFee = currentCalculation?.TotalAmount;
-        decimal? currentOutstanding = currentCalculation is null ? null : session.Outstanding(currentCalculation.TotalAmount);
         var timeline = BuildTimeline(payment, session, audit, webhooks);
         var sessionContext = new PaymentSessionContext(
             session.Id, session.PlateNumberRaw, session.VehicleType.ToString(), locationName,
@@ -168,26 +170,27 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
 
     public async Task<byte[]> ExportCsvAsync(PaymentQueryRequest request, CancellationToken ct)
     {
-        var payments = await ApplyOrdering(BuildQuery(request), request)
+        var payments = await ApplyOrdering(await BuildQueryAsync(request, ct), request)
             .Take(10_000)
             .ToListAsync(ct);
         var rows = await LoadProjectionsAsync(payments, ct);
 
         var sb = new StringBuilder();
-        sb.AppendLine("Payment ID,Created At,Paid At,Plate,Location,Amount,Currency,Provider,Method,Status,Receipt Number,Provider Checkout ID,Provider Payment ID,Session Status,Entry Time,Exit Time,Final Fee,Total Paid");
+        sb.AppendLine("Payment ID,Created At,Paid At,Plate,Location,Amount,Currency,Provider,Method,Status,Receipt Number,Provider Checkout ID,Provider Payment ID,Session Status,Entry Time,Exit Time,Final Fee,Total Paid,Current Fee,Balance Due,Override Cash");
         foreach (var row in rows.Select(ToContract))
         {
             sb.AppendLine(string.Join(',',
                 Csv(row.Id), Csv(row.CreatedAt), Csv(row.PaidAt), Csv(row.PlateNumberRaw), Csv(row.LocationName),
                 Csv(row.Amount), Csv(row.Currency), Csv(row.Provider), Csv(row.PaymentMethod), Csv(row.Status),
                 Csv(row.ReceiptNumber), Csv(row.ProviderCheckoutSessionId), Csv(row.ProviderPaymentId),
-                Csv(row.SessionStatus), Csv(row.EntryTime), Csv(row.ExitTime), Csv(row.FinalFee), Csv(row.TotalPaid)));
+                Csv(row.SessionStatus), Csv(row.EntryTime), Csv(row.ExitTime), Csv(row.FinalFee), Csv(row.TotalPaid),
+                Csv(row.CurrentFee), Csv(row.CurrentOutstanding), Csv(row.IsOverrideRelated)));
         }
 
         return Encoding.UTF8.GetBytes(sb.ToString());
     }
 
-    private IQueryable<Payment> BuildQuery(PaymentQueryRequest request)
+    private async Task<IQueryable<Payment>> BuildQueryAsync(PaymentQueryRequest request, CancellationToken ct)
     {
         // Keep filtering, sorting, and paging on the Payment entity. EF Core
         // cannot translate ordering by a property of a constructor-projected
@@ -203,6 +206,20 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
                 s.Id == p.ParkingSessionId && s.ParkingLocationId == locationId));
         if (request.SessionId is { } sessionId)
             query = query.Where(p => p.ParkingSessionId == sessionId);
+        if (request.OverrideOnly)
+        {
+            var overridePaymentIds = (await _db.AuditLogs.AsNoTracking()
+                    .Where(a => a.EntityType == nameof(Payment)
+                                && a.Action == "CashPaymentRecorded"
+                                && a.Reason != null
+                                && a.Reason != string.Empty)
+                    .Select(a => a.EntityId)
+                    .ToListAsync(ct))
+                .Select(id => Guid.TryParse(id, out var parsed) ? parsed : Guid.Empty)
+                .Where(id => id != Guid.Empty)
+                .ToArray();
+            query = query.Where(p => overridePaymentIds.Contains(p.Id));
+        }
         if (Enum.TryParse<PaymentStatus>(request.Status, true, out var status))
             query = query.Where(p => p.Status == status);
         else
@@ -255,10 +272,41 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
         var sessions = await _db.ParkingSessions.AsNoTracking()
             .Where(s => sessionIds.Contains(s.Id))
             .ToDictionaryAsync(s => s.Id, ct);
+        var overridePaymentIds = (await _db.AuditLogs.AsNoTracking()
+                .Where(a => a.EntityType == nameof(Payment)
+                            && a.Action == "CashPaymentRecorded"
+                            && a.Reason != null
+                            && a.Reason != string.Empty)
+                .Select(a => a.EntityId)
+                .ToListAsync(ct))
+            .Select(id => Guid.TryParse(id, out var parsed) ? parsed : Guid.Empty)
+            .Where(id => id != Guid.Empty)
+            .Where(id => payments.Any(p => p.Id == id))
+            .ToHashSet();
         var locationIds = sessions.Values.Select(s => s.ParkingLocationId).Distinct().ToArray();
         var locations = await _db.ParkingLocations.AsNoTracking()
             .Where(l => locationIds.Contains(l.Id))
             .ToDictionaryAsync(l => l.Id, ct);
+        var now = _clock.UtcNow;
+        var currentFeeBySession = new Dictionary<Guid, decimal?>();
+        var outstandingBySession = new Dictionary<Guid, decimal?>();
+        foreach (var session in sessions.Values)
+        {
+            if (session.ExitTime is { })
+            {
+                currentFeeBySession[session.Id] = null;
+                outstandingBySession[session.Id] = session.FinalFee is { } finalFee
+                    ? Math.Max(0m, finalFee - session.TotalPaid)
+                    : null;
+                continue;
+            }
+
+            var calculation = await _pricing.CalculateAsync(session, now, discount: null, ct);
+            currentFeeBySession[session.Id] = calculation?.TotalAmount;
+            outstandingBySession[session.Id] = calculation is null
+                ? null
+                : session.Outstanding(calculation.TotalAmount);
+        }
 
         return payments
             .Where(p => sessions.ContainsKey(p.ParkingSessionId))
@@ -274,7 +322,9 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
                     p.Amount, p.Currency, p.CreatedAt, p.PaidAt, p.ReceiptNumber,
                     p.ProviderCheckoutSessionId, p.ProviderPaymentId, p.CustomerEmail,
                     p.RecordedByGuardId, session.Status, session.EntryTime, session.ExitTime,
-                    session.FinalFee, session.TotalPaid, session.PaidExitDeadline);
+                    session.FinalFee, session.TotalPaid, session.PaidExitDeadline,
+                    currentFeeBySession.GetValueOrDefault(session.Id),
+                    outstandingBySession.GetValueOrDefault(session.Id), overridePaymentIds.Contains(p.Id), "Cash collected during override");
             })
             .ToArray();
     }
@@ -284,7 +334,17 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
         p.Status.ToString(), p.Provider.ToString(), p.PaymentMethod, p.Amount, p.Currency,
         p.CreatedAt, p.PaidAt, p.ReceiptNumber, p.ProviderCheckoutSessionId, p.ProviderPaymentId,
         MaskEmail(p.CustomerEmail), p.RecordedByGuardId, EffectiveSessionStatus(p.SessionStatus, p.PaidExitDeadline).ToString(), p.EntryTime,
-        p.ExitTime, p.FinalFee, p.TotalPaid, p.PaidExitDeadline);
+        p.ExitTime, p.FinalFee, p.TotalPaid, p.PaidExitDeadline,
+        p.CurrentFee, p.CurrentOutstanding,
+        p.IsOverrideRelated, p.OverrideLabel);
+
+    private async Task<bool> HasOverrideCashAuditAsync(Guid paymentId, CancellationToken ct)
+        => await _db.AuditLogs.AsNoTracking().AnyAsync(a =>
+            a.EntityType == nameof(Payment)
+            && a.EntityId == paymentId.ToString()
+            && a.Action == "CashPaymentRecorded"
+            && a.Reason != null
+            && a.Reason != string.Empty, ct);
 
     private static ParkingSessionStatus EffectiveSessionStatus(ParkingSessionStatus status, DateTimeOffset? deadline)
         => status == ParkingSessionStatus.PaidExitWindow && deadline is { } value && value <= DateTimeOffset.UtcNow
@@ -367,5 +427,9 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
         DateTimeOffset? ExitTime,
         decimal? FinalFee,
         decimal TotalPaid,
-        DateTimeOffset? PaidExitDeadline);
+        DateTimeOffset? PaidExitDeadline,
+        decimal? CurrentFee,
+        decimal? CurrentOutstanding,
+        bool IsOverrideRelated,
+        string? OverrideLabel);
 }

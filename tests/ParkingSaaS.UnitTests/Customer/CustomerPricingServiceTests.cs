@@ -110,14 +110,14 @@ public sealed class CustomerPricingServiceTests
     }
 
     [Fact]
-    public async Task Current_fee_unavailable_when_no_rate_plan_pinned()
+    public async Task Current_fee_falls_back_to_active_rate_plan_when_no_rate_plan_pinned()
     {
         var token = AddSession(_clock.UtcNow.AddHours(-2), versionId: null);
 
         var fee = await _service.GetCurrentFeeAsync(token, CancellationToken.None);
 
-        fee.PricingAvailable.Should().BeFalse();
-        fee.TotalAmount.Should().Be(0m);
+        fee.PricingAvailable.Should().BeTrue();
+        fee.TotalAmount.Should().Be(50m);
     }
 
     [Fact]

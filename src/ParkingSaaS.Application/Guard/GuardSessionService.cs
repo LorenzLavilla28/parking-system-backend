@@ -45,8 +45,8 @@ public sealed class GuardSessionService : IGuardSessionService
         _urls = urls.Value;
     }
 
-    public async Task<PagedResult<SessionSummaryResponse>> SearchAsync(
-        string? plate, string? status, Guid? parkingLocationId, bool activeOnly, PageQuery page, CancellationToken ct)
+    public async Task<SessionSearchResponse> SearchAsync(
+        string? plate, string? status, Guid? parkingLocationId, bool activeOnly, PageQuery page, CancellationToken ct, string? attention = null)
     {
         var q = _db.ParkingSessions.AsNoTracking().AsQueryable();
 
@@ -72,8 +72,23 @@ public sealed class GuardSessionService : IGuardSessionService
             q = q.Where(s => s.Status == parsed);
         }
 
+        q = ApplyAttentionFilter(q, attention);
+
         q = q.OrderByDescending(s => s.EntryTime);
         var now = DateTimeOffset.UtcNow;
+
+        var attentionQuery = activeOnly ? q : q.Where(_ => false);
+        var unpaidCount = await attentionQuery.LongCountAsync(s =>
+            s.Status == ParkingSessionStatus.ActiveUnpaid ||
+            s.Status == ParkingSessionStatus.PaymentPending ||
+            s.Status == ParkingSessionStatus.OverstayDue, ct);
+        var longRunningSince = now.AddDays(-7);
+        var longRunningCount = await attentionQuery.LongCountAsync(s => s.EntryTime <= longRunningSince, ct);
+        var attentionCount = await attentionQuery.LongCountAsync(s =>
+            s.EntryTime <= longRunningSince ||
+            s.Status == ParkingSessionStatus.ActiveUnpaid ||
+            s.Status == ParkingSessionStatus.PaymentPending ||
+            s.Status == ParkingSessionStatus.OverstayDue, ct);
 
         var total = await q.LongCountAsync(ct);
         var items = await q
@@ -89,11 +104,14 @@ public sealed class GuardSessionService : IGuardSessionService
         foreach (var session in items)
             summaries.Add(await ToSummaryAsync(session, locationNames.GetValueOrDefault(session.ParkingLocationId) ?? "Unknown location", now, ct));
 
-        return new PagedResult<SessionSummaryResponse>(
+        return new SessionSearchResponse(
             summaries.ToArray(),
             page.NormalizedPage,
             page.NormalizedPageSize,
-            total);
+            total,
+            attentionCount,
+            unpaidCount,
+            longRunningCount);
     }
 
     public async Task<SessionSummaryResponse> GetAsync(Guid id, CancellationToken ct)
@@ -143,6 +161,18 @@ public sealed class GuardSessionService : IGuardSessionService
         return q;
     }
 
+    private static IQueryable<ParkingSession> ApplyAttentionFilter(IQueryable<ParkingSession> q, string? attention)
+        => attention?.Trim().ToLowerInvariant() switch
+        {
+            "unpaid" => q.Where(s =>
+                s.Status == ParkingSessionStatus.ActiveUnpaid ||
+                s.Status == ParkingSessionStatus.PaymentPending ||
+                s.Status == ParkingSessionStatus.OverstayDue),
+            "over-grace" => q.Where(s => s.Status == ParkingSessionStatus.OverstayDue),
+            "paid-awaiting-exit" => q.Where(s => s.Status == ParkingSessionStatus.PaidExitWindow),
+            _ => q
+        };
+
     /// <summary>Returns the guard's assigned location ids, or null for supervisors/admins (no restriction).</summary>
     private async Task<HashSet<Guid>?> AssignedLocationIdsOrNullAsync(CancellationToken ct)
     {
@@ -173,7 +203,7 @@ public sealed class GuardSessionService : IGuardSessionService
             locationName,
             s.PlateNumberRaw,
             s.VehicleType.ToString(),
-            s.VehicleColor,
+            s.Notes,
             s.EntryTime,
             s.EffectiveStatus(now, calculatedFee).ToString(),
             result is not null,

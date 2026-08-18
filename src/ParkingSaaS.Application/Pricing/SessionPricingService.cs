@@ -15,23 +15,41 @@ public sealed class SessionPricingService : ISessionPricingService
 {
     private readonly IApplicationDbContext _db;
     private readonly IParkingFeeCalculator _calculator;
+    private readonly IActiveRatePlanResolver _activeRatePlanResolver;
 
     public SessionPricingService(IApplicationDbContext db, IParkingFeeCalculator calculator)
+        : this(db, calculator, new ActiveRatePlanResolver(db))
+    {
+    }
+
+    public SessionPricingService(IApplicationDbContext db, IParkingFeeCalculator calculator, IActiveRatePlanResolver activeRatePlanResolver)
     {
         _db = db;
         _calculator = calculator;
+        _activeRatePlanResolver = activeRatePlanResolver;
     }
 
     public async Task<FeeCalculationResult?> CalculateAsync(
         ParkingSession session, DateTimeOffset at, DiscountInput? discount, CancellationToken ct)
     {
-        if (session.RatePlanVersionId is not { } versionId)
-            return null;
-
-        var version = await _db.RatePlanVersions
-            .IgnoreQueryFilters()
-            .AsNoTracking()
-            .FirstOrDefaultAsync(v => v.Id == versionId, ct);
+        var version = session.RatePlanVersionId is { } pinnedVersionId
+            ? await _db.RatePlanVersions
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .FirstOrDefaultAsync(v => v.Id == pinnedVersionId, ct)
+            : null;
+        if (version is null)
+        {
+            // Legacy sessions created before rate-plan versions were pinned can
+            // still be priced using the plan currently in effect at the location.
+            var fallbackVersionId = await _activeRatePlanResolver.ResolveActiveVersionIdAsync(session.ParkingLocationId, at, ct);
+            if (fallbackVersionId is not { } resolvedVersionId)
+                return null;
+            version = await _db.RatePlanVersions
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .FirstOrDefaultAsync(v => v.Id == resolvedVersionId, ct);
+        }
         if (version is null)
             return null;
 

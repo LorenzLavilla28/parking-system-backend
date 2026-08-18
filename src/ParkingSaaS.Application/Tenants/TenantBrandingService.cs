@@ -6,6 +6,7 @@ using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Application.Common.Options;
 using ParkingSaaS.Contracts.Tenants;
 using ParkingSaaS.Domain.Locations;
+using ParkingSaaS.Domain.Tenants;
 
 namespace ParkingSaaS.Application.Tenants;
 
@@ -113,7 +114,7 @@ public sealed class TenantBrandingService : ITenantBrandingService
         var tenant = await _db.Tenants
             .IgnoreQueryFilters()
             .AsNoTracking()
-            .FirstOrDefaultAsync(t => t.Id == location.TenantId, ct)
+            .FirstOrDefaultAsync(t => t.Id == location.TenantId && t.Status == TenantStatus.Active, ct)
             ?? throw new NotFoundException("Tenant not found.");
 
         return await DownloadAsync(tenant.LogoObjectKey, tenant.LogoContentType, ct);

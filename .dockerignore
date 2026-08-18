@@ -4,6 +4,7 @@
 **/.idea/
 **/node_modules/
 **/dist/
+**/.build-check*/
 **/.git/
 **/*.user
 frontend/

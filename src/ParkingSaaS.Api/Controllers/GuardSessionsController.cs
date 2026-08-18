@@ -22,11 +22,18 @@ public sealed class GuardSessionsController : ApiControllerBase
         [FromQuery] string? status,
         [FromQuery] Guid? locationId,
         [FromQuery] bool activeOnly,
-        [FromQuery] PageQuery page,
+        [FromQuery] string? attention,
+        [FromQuery] int? page,
+        [FromQuery] int? pageSize,
         CancellationToken ct)
     {
-        var result = await _sessions.SearchAsync(plate, status, locationId, activeOnly, page, ct);
-        return Ok(ApiResponse<PagedResult<SessionSummaryResponse>>.Ok(result));
+        var pageQuery = new PageQuery
+        {
+            Page = page ?? 1,
+            PageSize = pageSize ?? 10,
+        };
+        var result = await _sessions.SearchAsync(plate, status, locationId, activeOnly, pageQuery, ct, attention);
+        return Ok(ApiResponse<SessionSearchResponse>.Ok(result));
     }
 
     [HttpGet("{id:guid}", Name = "GuardSessionsGet")]

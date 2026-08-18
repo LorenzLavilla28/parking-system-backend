@@ -109,7 +109,7 @@ public sealed class GuardEntryService : IGuardEntryService
                 plateRaw: request.PlateNumber,
                 plateNormalized: normalized,
                 vehicleType: vehicleType,
-                vehicleColor: request.VehicleColor,
+                notes: request.Notes,
                 entryTime: _clock.UtcNow,
                 entryPhotoUrl: request.EntryPhotoUrl);
 

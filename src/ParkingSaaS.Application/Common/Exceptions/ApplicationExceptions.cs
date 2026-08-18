@@ -24,6 +24,13 @@ public sealed class ForbiddenException : AppException
         : base("forbidden", message) { }
 }
 
+/// <summary>Blocks staff access when the owning tenant is not active.</summary>
+public sealed class TenantSuspendedException : AppException
+{
+    public TenantSuspendedException(string message = "This tenant membership is suspended. Contact your platform administrator.")
+        : base("tenant_suspended", message) { }
+}
+
 public sealed class UnauthorizedAppException : AppException
 {
     public UnauthorizedAppException(string message = "Invalid credentials.")

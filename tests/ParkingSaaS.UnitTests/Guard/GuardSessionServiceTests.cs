@@ -4,6 +4,7 @@ using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Common.Options;
 using ParkingSaaS.Application.Guard;
 using ParkingSaaS.Application.Pricing;
+using ParkingSaaS.Contracts.Common;
 using ParkingSaaS.Contracts.Realtime;
 using ParkingSaaS.Domain.Locations;
 using ParkingSaaS.Domain.Sessions;
@@ -17,6 +18,44 @@ namespace ParkingSaaS.UnitTests.Guard;
 
 public sealed class GuardSessionServiceTests
 {
+    [Fact]
+    public async Task Search_paginates_on_the_server_and_returns_attention_counts()
+    {
+        var tenantId = Guid.NewGuid();
+        var tenant = new MutableTenantContext();
+        tenant.ScopeTo(tenantId);
+        await using var db = InMemoryDb.Create(tenant);
+        var location = new ParkingLocation(tenantId, "Lot", "paged-lot", "Asia/Manila", null);
+        var oldEntry = DateTimeOffset.UtcNow.AddDays(-8);
+        var activeUnpaid = ParkingSession.RecordEntry(tenantId, location.Id, Guid.NewGuid(), "OLD 1", "OLD1",
+            VehicleType.Car, null, oldEntry, null);
+        var current = ParkingSession.RecordEntry(tenantId, location.Id, Guid.NewGuid(), "NEW 1", "NEW1",
+            VehicleType.Car, null, DateTimeOffset.UtcNow.AddHours(-1), null);
+        var overstay = ParkingSession.RecordEntry(tenantId, location.Id, Guid.NewGuid(), "OLD 2", "OLD2",
+            VehicleType.Car, null, oldEntry, null);
+        overstay.RegisterPayment(50m, oldEntry.AddHours(3));
+        overstay.MarkOverstay();
+        db.ParkingLocations.Add(location);
+        db.ParkingSessions.AddRange(activeUnpaid, current, overstay);
+        await db.SaveChangesAsync();
+
+        var user = new FakeCurrentUser { TenantId = tenantId, Roles = new[] { RoleType.TenantAdministrator } };
+        var service = new GuardSessionService(
+            db, user, new PlateNormalizer(), new FakeSessionPricingService { Result = FeeResults.Of(120m) },
+            new TestParkingTokenService(), new FakeQrCodeGenerator(),
+            Options.Create(new PublicUrlOptions { BaseUrl = "https://parking.test" }));
+
+        var result = await service.SearchAsync(null, null, null, true,
+            new PageQuery { Page = 1, PageSize = 1 }, CancellationToken.None);
+
+        result.Items.Should().ContainSingle();
+        result.TotalCount.Should().Be(3);
+        result.TotalPages.Should().Be(3);
+        result.AttentionCount.Should().Be(3);
+        result.UnpaidCount.Should().Be(3);
+        result.LongRunningCount.Should().Be(2);
+    }
+
     [Fact]
     public async Task Closed_session_uses_recorded_final_fee_instead_of_live_recalculation()
     {

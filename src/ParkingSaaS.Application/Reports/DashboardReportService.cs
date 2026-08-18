@@ -51,6 +51,11 @@ public sealed class DashboardReportService : IDashboardReportService
             .AsNoTracking()
             .Where(s => !parkingLocationId.HasValue || s.ParkingLocationId == parkingLocationId.Value);
 
+        var maximumCapacity = await _db.ParkingLocations
+            .AsNoTracking()
+            .Where(l => !parkingLocationId.HasValue || l.Id == parkingLocationId.Value)
+            .SumAsync(l => l.SlotCapacity, ct);
+
         var statusCounts = await sessionsQuery
             .GroupBy(s => s.Status)
             .Select(g => new { Status = g.Key, Count = g.Count() })
@@ -82,6 +87,16 @@ public sealed class DashboardReportService : IDashboardReportService
             overGraceAmount += session.Outstanding(calculation.TotalAmount);
         }
         var activeSessions = unpaidSessions + paidAwaitingExit + overGraceSessions;
+        var oldestActiveEntry = await sessionsQuery
+            .Where(s => s.Status == ParkingSessionStatus.ActiveUnpaid
+                        || s.Status == ParkingSessionStatus.PaymentPending
+                        || s.Status == ParkingSessionStatus.PaidExitWindow
+                        || s.Status == ParkingSessionStatus.OverstayDue)
+            .Select(s => (DateTimeOffset?)s.EntryTime)
+            .MinAsync(ct);
+        var oldestActiveSessionMinutes = oldestActiveEntry is { } entry
+            ? Math.Max(0d, (now - entry).TotalMinutes)
+            : 0d;
 
         var todayEntries = await sessionsQuery
             .CountAsync(s => s.EntryTime >= todayStart && s.EntryTime < periodEnd, ct);
@@ -107,8 +122,21 @@ public sealed class DashboardReportService : IDashboardReportService
                   && ((payment.CreatedAt >= previousPeriodStart && payment.CreatedAt < periodEnd)
                       || (payment.PaidAt >= previousPeriodStart && payment.PaidAt < periodEnd))
             select payment)
-            .Select(p => new PaymentRow(p.Provider, p.Status, p.Amount, p.PaidAt, p.CreatedAt))
+            .Select(p => new PaymentRow(p.Id, p.Provider, p.Status, p.Amount, p.PaidAt, p.CreatedAt))
             .ToListAsync(ct);
+
+        var overrideCashPaymentIds = (await _db.AuditLogs.AsNoTracking()
+                .Where(a => a.EntityType == nameof(Payment)
+                            && a.Action == "CashPaymentRecorded"
+                            && a.Reason != null
+                            && a.Reason != string.Empty
+                            && a.CreatedAt >= periodStart
+                            && a.CreatedAt < periodEnd)
+                .Select(a => a.EntityId)
+                .ToListAsync(ct))
+            .Select(id => Guid.TryParse(id, out var parsed) ? parsed : Guid.Empty)
+            .Where(id => id != Guid.Empty)
+            .ToHashSet();
 
         var currentPayments = payments
             .Where(p => (p.CreatedAt >= periodStart && p.CreatedAt < periodEnd)
@@ -127,6 +155,11 @@ public sealed class DashboardReportService : IDashboardReportService
         var todayRevenue = paidPayments
             .Where(p => p.PaidAt >= todayStart && p.PaidAt < periodEnd)
             .Sum(p => p.Amount);
+
+        var overrideCashPayments = paidPayments
+            .Where(p => p.Provider == PaymentProvider.Cash && overrideCashPaymentIds.Contains(p.Id))
+            .ToArray();
+        var overrideCashRevenue = overrideCashPayments.Sum(p => p.Amount);
 
         var revenue = Enumerable.Range(0, periodDays)
             .Select(offset =>
@@ -156,7 +189,7 @@ public sealed class DashboardReportService : IDashboardReportService
         var paymentMix = new[]
         {
             Mix("paymongo", "PayMongo", paidPayments.Count(p => p.Provider == PaymentProvider.PayMongo), paidPayments.Where(p => p.Provider == PaymentProvider.PayMongo).Sum(p => p.Amount)),
-            Mix("cash", "Cash", paidPayments.Count(p => p.Provider == PaymentProvider.Cash), paidPayments.Where(p => p.Provider == PaymentProvider.Cash).Sum(p => p.Amount)),
+            Mix("cash", "Cash", paidPayments.Count(p => p.Provider == PaymentProvider.Cash), paidPayments.Where(p => p.Provider == PaymentProvider.Cash).Sum(p => p.Amount), overrideCashRevenue, overrideCashPayments.Length),
             Mix("complimentary", "Complimentary", complimentaryCount, 0m),
             Mix("failed", "Failed / expired", currentPayments.Count(p => p.Status is PaymentStatus.Failed or PaymentStatus.Expired), currentPayments.Where(p => p.Status is PaymentStatus.Failed or PaymentStatus.Expired).Sum(p => p.Amount)),
             Mix("pending", "Pending", currentPayments.Count(p => p.Status is PaymentStatus.Pending or PaymentStatus.Processing), currentPayments.Where(p => p.Status is PaymentStatus.Pending or PaymentStatus.Processing).Sum(p => p.Amount))
@@ -179,15 +212,22 @@ public sealed class DashboardReportService : IDashboardReportService
             periodRevenue,
             averageDurationMinutes,
             previousPeriodRevenue,
-            supervisorOverrides);
+            supervisorOverrides,
+            overrideCashRevenue,
+            overrideCashPayments.Length,
+            oldestActiveSessionMinutes,
+            maximumCapacity);
 
         return new DashboardReportResponse(periodStart, periodEnd, summary, revenue, paymentMix);
     }
 
-    private static PaymentMixResponse Mix(string key, string label, int count, decimal amount)
-        => new(key, label, amount, count);
+    private static PaymentMixResponse Mix(
+        string key, string label, int count, decimal amount,
+        decimal overrideAmount = 0m, int overrideCount = 0)
+        => new(key, label, amount, count, overrideAmount, overrideCount);
 
     private sealed record PaymentRow(
+        Guid Id,
         PaymentProvider Provider,
         PaymentStatus Status,
         decimal Amount,

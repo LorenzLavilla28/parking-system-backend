@@ -10,7 +10,7 @@ public sealed class RecordEntryRequestValidator : AbstractValidator<RecordEntryR
         RuleFor(x => x.ParkingLocationId).NotEmpty();
         RuleFor(x => x.PlateNumber).NotEmpty().MaximumLength(32);
         RuleFor(x => x.VehicleType).NotEmpty();
-        RuleFor(x => x.VehicleColor).MaximumLength(40);
+        RuleFor(x => x.Notes).MaximumLength(500);
         RuleFor(x => x.EntryPhotoUrl).MaximumLength(1000);
     }
 }

@@ -16,7 +16,7 @@ public class ParkingSession : AuditableEntity, ITenantOwned
     public string PlateNumberRaw { get; private set; } = string.Empty;
     public string PlateNumberNormalized { get; private set; } = string.Empty;
     public VehicleType VehicleType { get; private set; }
-    public string? VehicleColor { get; private set; }
+    public string? Notes { get; private set; }
 
     public DateTimeOffset EntryTime { get; private set; }
     public DateTimeOffset? ExitTime { get; private set; }
@@ -57,7 +57,7 @@ public class ParkingSession : AuditableEntity, ITenantOwned
         string plateRaw,
         string plateNormalized,
         VehicleType vehicleType,
-        string? vehicleColor,
+        string? notes,
         DateTimeOffset entryTime,
         string? entryPhotoUrl)
     {
@@ -74,7 +74,7 @@ public class ParkingSession : AuditableEntity, ITenantOwned
             PlateNumberRaw = plateRaw.Trim(),
             PlateNumberNormalized = plateNormalized,
             VehicleType = vehicleType,
-            VehicleColor = string.IsNullOrWhiteSpace(vehicleColor) ? null : vehicleColor.Trim(),
+            Notes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim(),
             EntryTime = entryTime,
             Status = ParkingSessionStatus.ActiveUnpaid,
             EntryPhotoUrl = entryPhotoUrl,

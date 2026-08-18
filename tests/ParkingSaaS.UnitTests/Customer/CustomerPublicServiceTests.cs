@@ -8,6 +8,7 @@ using ParkingSaaS.Contracts.Customer;
 using ParkingSaaS.Domain.Locations;
 using ParkingSaaS.Domain.Sessions;
 using ParkingSaaS.Domain.Services;
+using ParkingSaaS.Domain.Tenants;
 using ParkingSaaS.Infrastructure.Persistence;
 using ParkingSaaS.Infrastructure.Sessions;
 using ParkingSaaS.UnitTests.Common;
@@ -17,7 +18,7 @@ namespace ParkingSaaS.UnitTests.Customer;
 
 public sealed class CustomerPublicServiceTests
 {
-    private readonly Guid _tenantId = Guid.NewGuid();
+    private readonly Guid _tenantId;
     private readonly MutableTenantContext _tenant = new();
     private readonly AppDbContext _db;
     private readonly ParkingTokenService _tokens = new(new EphemeralDataProtectionProvider());
@@ -30,6 +31,8 @@ public sealed class CustomerPublicServiceTests
 
     public CustomerPublicServiceTests()
     {
+        var tenantRecord = new Tenant("Demo Parking", "demo-parking", SubscriptionPlan.Starter, "PHP", "Asia/Manila");
+        _tenantId = tenantRecord.Id;
         _tenant.ScopeTo(_tenantId);
         _db = InMemoryDb.Create(_tenant);
         _service = new CustomerPublicService(
@@ -37,6 +40,7 @@ public sealed class CustomerPublicServiceTests
             new FakeSessionPricingService(), new TestClock(DateTimeOffset.UtcNow),
             NullLogger<CustomerPublicService>.Instance);
 
+        _db.Tenants.Add(tenantRecord);
         _location = new ParkingLocation(_tenantId, "Demo Lot", "demo-lot", "Asia/Manila", "1 Demo St");
         _db.ParkingLocations.Add(_location);
         _db.SaveChanges();

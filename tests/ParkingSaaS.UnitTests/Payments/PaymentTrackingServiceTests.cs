@@ -15,6 +15,36 @@ namespace ParkingSaaS.UnitTests.Payments;
 public sealed class PaymentTrackingServiceTests
 {
     [Fact]
+    public async Task Search_calculates_current_fee_and_balance_due_for_overstay()
+    {
+        var now = new DateTimeOffset(2026, 8, 18, 10, 0, 0, TimeSpan.Zero);
+        var tenantId = Guid.NewGuid();
+        var tenant = new MutableTenantContext();
+        tenant.ScopeTo(tenantId);
+        await using var db = InMemoryDb.Create(tenant);
+        var location = new ParkingLocation(tenantId, "Lot", "balance-lot", "Asia/Manila", null);
+        var session = ParkingSession.RecordEntry(tenantId, location.Id, Guid.NewGuid(), "BAL 123", "BAL123",
+            VehicleType.Car, null, now.AddHours(-8), null);
+        session.RegisterPayment(50m, now.AddHours(-4));
+        session.MarkOverstay();
+        var payment = Payment.CreateCashPaid(tenantId, session.Id, null, "PHP", 50m,
+            "balance-ref", "balance-protected", now.AddHours(-5), "CR-BALANCE", Guid.NewGuid());
+        db.ParkingLocations.Add(location);
+        db.ParkingSessions.Add(session);
+        db.Payments.Add(payment);
+        await db.SaveChangesAsync();
+
+        var pricing = new FakeSessionPricingService { Result = FeeResults.Of(120m) };
+        var service = new PaymentTrackingService(db, pricing, new TestClock(now));
+
+        var result = await service.SearchAsync(new PaymentQueryRequest(), CancellationToken.None);
+
+        result.Items.Should().ContainSingle();
+        result.Items[0].CurrentFee.Should().Be(120m);
+        result.Items[0].CurrentOutstanding.Should().Be(70m);
+    }
+
+    [Fact]
     public async Task Search_and_detail_include_payment_and_session_evidence()
     {
         var tenantId = Guid.NewGuid();

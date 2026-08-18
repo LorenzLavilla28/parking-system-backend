@@ -63,7 +63,7 @@ public sealed class GuardExitService : IGuardExitService
         var (decision, canExit) = Decide(effectiveStatus, outstanding, session.TotalPaid);
 
         return new ExitStatusResponse(
-            session.Id, session.PlateNumberRaw, session.VehicleType.ToString(), effectiveStatus.ToString(),
+            session.Id, session.PlateNumberRaw, session.VehicleType.ToString(), session.Notes, effectiveStatus.ToString(),
             decision, result is not null, result?.Currency ?? "PHP",
             effectiveFee, session.TotalPaid, outstanding, session.EntryTime, session.PaidExitDeadline, canExit);
     }

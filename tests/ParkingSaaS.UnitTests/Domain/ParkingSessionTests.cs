@@ -15,7 +15,7 @@ public sealed class ParkingSessionTests
             plateRaw: "ABC 1234",
             plateNormalized: "ABC1234",
             vehicleType: VehicleType.Car,
-            vehicleColor: " Red ",
+            notes: " VIP guest ",
             entryTime: DateTimeOffset.UtcNow,
             entryPhotoUrl: null);
 
@@ -26,7 +26,7 @@ public sealed class ParkingSessionTests
         session.Status.Should().Be(ParkingSessionStatus.ActiveUnpaid);
         session.IsActive.Should().BeTrue();
         session.TotalPaid.Should().Be(0m);
-        session.VehicleColor.Should().Be("Red");
+        session.Notes.Should().Be("VIP guest");
     }
 
     [Fact]

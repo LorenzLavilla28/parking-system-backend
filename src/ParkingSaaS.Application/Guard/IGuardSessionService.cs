@@ -5,8 +5,8 @@ namespace ParkingSaaS.Application.Guard;
 
 public interface IGuardSessionService
 {
-    Task<PagedResult<SessionSummaryResponse>> SearchAsync(
-        string? plate, string? status, Guid? parkingLocationId, bool activeOnly, PageQuery page, CancellationToken ct);
+    Task<SessionSearchResponse> SearchAsync(
+        string? plate, string? status, Guid? parkingLocationId, bool activeOnly, PageQuery page, CancellationToken ct, string? attention = null);
 
     Task<SessionSummaryResponse> GetAsync(Guid id, CancellationToken ct);
 

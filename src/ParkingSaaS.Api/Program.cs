@@ -225,6 +225,7 @@ else
 app.UseCors("spa");
 app.UseRateLimiter();
 app.UseAuthentication();
+app.UseMiddleware<TenantStatusMiddleware>();
 app.UseAuthorization();
 
 app.MapControllers();

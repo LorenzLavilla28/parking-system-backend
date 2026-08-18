@@ -22,7 +22,8 @@ public sealed record AuthUserDto(
     string FullName,
     IReadOnlyCollection<string> Roles,
     IReadOnlyCollection<Guid> AssignedLocationIds,
-    bool MustChangePassword);
+    bool MustChangePassword,
+    string TenantStatus);
 
 public sealed record AuthResponse(
     string AccessToken,
