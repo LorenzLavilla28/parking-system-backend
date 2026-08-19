@@ -50,7 +50,7 @@ public sealed class CustomerPaymentServiceTests
         var location = new ParkingLocation(_tenantId, "Lot", "lot", "Asia/Manila", null);
         _db.ParkingLocations.Add(location);
         _session = ParkingSession.RecordEntry(_tenantId, location.Id, Guid.NewGuid(), "ABC1234", "ABC1234", VehicleType.Car, null, _clock.UtcNow.AddHours(-3), null);
-        _session.AssignTokens("h", _tokens.Protect("session-token"), "th", "tp");
+        _session.AssignTokens(_tokens.Hash("session-token"), _tokens.Protect("session-token"), "th", "tp");
         _db.ParkingSessions.Add(_session);
         var quote = new FeeQuote(_tenantId, _session.Id, "PHP", total, 0m, total, _clock.UtcNow, expires, "[]", null);
         _db.FeeQuotes.Add(quote);
@@ -97,6 +97,22 @@ public sealed class CustomerPaymentServiceTests
         payment.ProviderCheckoutSessionId.Should().Be("pi_test_123");
         payment.ProviderCheckoutUrl.Should().BeEmpty();
         payment.Status.Should().Be(PaymentStatus.Pending);
+    }
+
+    [Fact]
+    public async Task Active_dynamic_qr_can_be_recovered_for_a_public_session()
+    {
+        var quote = SeedQuote(90m, _clock.UtcNow.AddMinutes(10));
+        var created = await _service.CreateDynamicQrAsync(
+            new StartCheckoutRequest(quote.Id, "buyer@example.com"), null, null, CancellationToken.None);
+
+        var recovered = await _service.GetActivePaymentAsync("session-token", CancellationToken.None);
+
+        recovered.Should().NotBeNull();
+        recovered!.PaymentReference.Should().Be(created.PaymentReference);
+        recovered.QrCodeImageUrl.Should().Be("data:image/png;base64,QQ==");
+        recovered.Amount.Should().Be(90m);
+        _gateway.DynamicQrCalls.Should().Be(1, "recovery must not create another payment intent");
     }
 
     [Fact]

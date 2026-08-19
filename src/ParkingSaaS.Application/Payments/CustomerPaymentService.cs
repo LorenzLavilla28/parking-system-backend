@@ -72,6 +72,52 @@ public sealed class CustomerPaymentService : ICustomerPaymentService
         StartCheckoutRequest request, string? ipAddress, string? deviceInformation, CancellationToken ct)
         => await CreatePaymentAsync(request, useDynamicQr: true, ipAddress, deviceInformation, ct);
 
+    public async Task<CheckoutResponse?> GetActivePaymentAsync(string publicToken, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(publicToken))
+            throw new NotFoundException("Session not found.");
+
+        var publicTokenHash = _tokens.Hash(publicToken);
+        var session = await _db.ParkingSessions
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(s => s.PublicTokenHash == publicTokenHash, ct)
+            ?? throw new NotFoundException("Session not found.");
+
+        var payment = await _db.Payments
+            .IgnoreQueryFilters()
+            .Where(p => p.ParkingSessionId == session.Id
+                        && p.Provider == PaymentProvider.PayMongo
+                        && (p.Status == PaymentStatus.Pending || p.Status == PaymentStatus.Processing)
+                        && p.ProviderCheckoutSessionId != null
+                        && p.ProviderCheckoutSessionId.StartsWith("pi_"))
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (payment is null)
+            return null;
+
+        // A revisit is also an opportunity to self-heal immediately if the customer
+        // already paid while this tab was closed and the webhook is delayed.
+        var reference = _tokens.Unprotect(payment.PublicReferenceProtected);
+        var status = await GetStatusAsync(reference, ct);
+        if (status.Status is not nameof(PaymentStatus.Pending) and not nameof(PaymentStatus.Processing))
+            return null;
+
+        var qrImage = await _gateway.GetQrCodeImageAsync(
+            payment.TenantId, payment.ProviderCheckoutSessionId!, ct);
+        if (string.IsNullOrWhiteSpace(qrImage))
+            return null;
+
+        return new CheckoutResponse(
+            reference,
+            string.Empty,
+            payment.Amount,
+            payment.Currency,
+            qrImage,
+            payment.CreatedAt.Add(DynamicQrLifetime));
+    }
+
     private async Task<CheckoutResponse> CreatePaymentAsync(
         StartCheckoutRequest request, bool useDynamicQr, string? ipAddress, string? deviceInformation, CancellationToken ct)
     {

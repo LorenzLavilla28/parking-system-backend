@@ -14,6 +14,9 @@ public interface ICustomerPaymentService
     Task<CheckoutResponse> CreateDynamicQrAsync(
         StartCheckoutRequest request, string? ipAddress, string? deviceInformation, CancellationToken ct);
 
+    /// <summary>Recovers the latest open dynamic QR payment for a public parking session, if one exists.</summary>
+    Task<CheckoutResponse?> GetActivePaymentAsync(string publicToken, CancellationToken ct);
+
     /// <summary>Returns the current payment status for the public reference (status-page polling).</summary>
     Task<PaymentStatusResponse> GetStatusAsync(string paymentReference, CancellationToken ct);
 }
