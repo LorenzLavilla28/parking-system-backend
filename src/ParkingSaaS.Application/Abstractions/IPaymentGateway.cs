@@ -17,7 +17,8 @@ public sealed record CreateCheckoutResult(
     string ProviderCheckoutId,
     string CheckoutUrl,
     string RawProviderReference,
-    string? ProviderAccountId = null);
+    string? ProviderAccountId = null,
+    string? QrCodeImageUrl = null);
 
 public sealed record PaymentStatusResult(
     PaymentStatus Status,
@@ -47,6 +48,10 @@ public interface IPaymentGateway
 {
     Task<CreateCheckoutResult> CreateCheckoutAsync(CreateCheckoutRequest request, CancellationToken cancellationToken);
     Task<CreateCheckoutResult> CreateCheckoutAsync(Guid tenantId, CreateCheckoutRequest request, CancellationToken cancellationToken);
+    Task<CreateCheckoutResult> CreateDynamicQrAsync(CreateCheckoutRequest request, CancellationToken cancellationToken);
+    Task<CreateCheckoutResult> CreateDynamicQrAsync(Guid tenantId, CreateCheckoutRequest request, CancellationToken cancellationToken);
+    Task<string?> GetQrCodeImageAsync(string providerReference, CancellationToken cancellationToken);
+    Task<string?> GetQrCodeImageAsync(Guid tenantId, string providerReference, CancellationToken cancellationToken);
     Task<PaymentStatusResult> GetPaymentStatusAsync(string providerReference, CancellationToken cancellationToken);
     Task<PaymentStatusResult> GetPaymentStatusAsync(Guid tenantId, string providerReference, CancellationToken cancellationToken);
     Task ExpireCheckoutAsync(string providerReference, CancellationToken cancellationToken);

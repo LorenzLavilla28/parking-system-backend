@@ -74,6 +74,11 @@ public sealed class CustomerController : ApiControllerBase
         => Ok(ApiResponse<CheckoutResponse>.Ok(await _payments.CreateCheckoutAsync(
             request, ClientIp, Request.Headers.UserAgent.ToString(), ct)));
 
+    [HttpPost("payments/qr")]
+    public async Task<IActionResult> CreateDynamicQr([FromBody] StartCheckoutRequest request, CancellationToken ct)
+        => Ok(ApiResponse<CheckoutResponse>.Ok(await _payments.CreateDynamicQrAsync(
+            request, ClientIp, Request.Headers.UserAgent.ToString(), ct)));
+
     [HttpGet("payments/{reference}/status")]
     public async Task<IActionResult> PaymentStatus(string reference, CancellationToken ct)
         => Ok(ApiResponse<PaymentStatusResponse>.Ok(await _payments.GetStatusAsync(reference, ct)));

@@ -12,7 +12,9 @@ using ParkingSaaS.Domain.Payments;
 namespace ParkingSaaS.Infrastructure.Payments.PayMongo;
 
 /// <summary>
-/// PayMongo Hosted Checkout implementation of <see cref="IPaymentGateway"/>.
+/// PayMongo payment implementation of <see cref="IPaymentGateway"/>. Hosted
+/// Checkout remains supported for existing callers; new parking payments can
+/// use the Payment Intent + dynamic QR Ph flow.
 /// The secret key is used only here (HTTP Basic, key as username) and is never
 /// logged. Amounts are sent/received in centavos. Webhook verification is
 /// delegated to <see cref="PayMongoSignature"/>.
@@ -81,6 +83,7 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
         };
 
         using var httpRequest = CreateRequest(HttpMethod.Post, "checkout_sessions", credentials);
+        httpRequest.Headers.TryAddWithoutValidation("Idempotency-Key", request.IdempotencyKey);
         httpRequest.Content = JsonContent.Create(body);
         using var response = await _http.SendAsync(httpRequest, ct);
         await EnsureSuccessAsync(response, "create checkout", ct);
@@ -94,6 +97,122 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
         return new CreateCheckoutResult(id, checkoutUrl, id, credentials.PayMongoAccountId);
     }
 
+    public Task<CreateCheckoutResult> CreateDynamicQrAsync(CreateCheckoutRequest request, CancellationToken ct)
+        => CreateDynamicQrInternalAsync(null, request, ct);
+
+    public Task<CreateCheckoutResult> CreateDynamicQrAsync(Guid tenantId, CreateCheckoutRequest request, CancellationToken ct)
+        => CreateDynamicQrInternalAsync(tenantId, request, ct);
+
+    private async Task<CreateCheckoutResult> CreateDynamicQrInternalAsync(
+        Guid? tenantId, CreateCheckoutRequest request, CancellationToken ct)
+    {
+        var credentials = await GetCredentialsAsync(tenantId, ct);
+        var amount = ToCentavos(request.Amount);
+
+        var intentBody = new
+        {
+            data = new
+            {
+                attributes = new
+                {
+                    amount,
+                    currency = request.Currency,
+                    payment_method_allowed = new[] { "qrph" },
+                    description = request.Description,
+                    metadata = new { reference = request.ReferenceNumber }
+                }
+            }
+        };
+
+        using var intentRequest = CreateRequest(HttpMethod.Post, "payment_intents", credentials);
+        intentRequest.Headers.TryAddWithoutValidation("Idempotency-Key", $"{request.IdempotencyKey}-intent");
+        intentRequest.Content = JsonContent.Create(intentBody);
+        using var intentResponse = await _http.SendAsync(intentRequest, ct);
+        await EnsureSuccessAsync(intentResponse, "create QR payment intent", ct);
+
+        using var intentDoc = JsonDocument.Parse(await intentResponse.Content.ReadAsStringAsync(ct));
+        var intentData = intentDoc.RootElement.GetProperty("data");
+        var intentId = intentData.GetProperty("id").GetString()!;
+        var clientKey = intentData.GetProperty("attributes").GetProperty("client_key").GetString()!;
+
+        var methodBody = new
+        {
+            data = new
+            {
+                attributes = new
+                {
+                    type = "qrph",
+                    expiry_seconds = 1800
+                }
+            }
+        };
+
+        using var methodRequest = CreateRequest(HttpMethod.Post, "payment_methods", credentials);
+        methodRequest.Headers.TryAddWithoutValidation("Idempotency-Key", $"{request.IdempotencyKey}-method");
+        methodRequest.Content = JsonContent.Create(methodBody);
+        using var methodResponse = await _http.SendAsync(methodRequest, ct);
+        await EnsureSuccessAsync(methodResponse, "create QR payment method", ct);
+
+        using var methodDoc = JsonDocument.Parse(await methodResponse.Content.ReadAsStringAsync(ct));
+        var methodId = methodDoc.RootElement.GetProperty("data").GetProperty("id").GetString()!;
+
+        var attachBody = new
+        {
+            data = new
+            {
+                attributes = new
+                {
+                    payment_method = methodId,
+                    client_key = clientKey
+                }
+            }
+        };
+
+        using var attachRequest = CreateRequest(HttpMethod.Post, $"payment_intents/{intentId}/attach", credentials);
+        attachRequest.Headers.TryAddWithoutValidation("Idempotency-Key", $"{request.IdempotencyKey}-attach");
+        attachRequest.Content = JsonContent.Create(attachBody);
+        using var attachResponse = await _http.SendAsync(attachRequest, ct);
+        await EnsureSuccessAsync(attachResponse, "attach QR payment method", ct);
+
+        using var attachDoc = JsonDocument.Parse(await attachResponse.Content.ReadAsStringAsync(ct));
+        var attachAttributes = attachDoc.RootElement.GetProperty("data").GetProperty("attributes");
+        var imageUrl = attachAttributes
+            .GetProperty("next_action")
+            .GetProperty("code")
+            .GetProperty("image_url")
+            .GetString();
+
+        if (string.IsNullOrWhiteSpace(imageUrl))
+            throw new InvalidOperationException("PayMongo did not return a dynamic QR image.");
+
+        return new CreateCheckoutResult(intentId, string.Empty, intentId, credentials.PayMongoAccountId, imageUrl);
+    }
+
+    public Task<string?> GetQrCodeImageAsync(string providerReference, CancellationToken ct)
+        => GetQrCodeImageInternalAsync(null, providerReference, ct);
+
+    public Task<string?> GetQrCodeImageAsync(Guid tenantId, string providerReference, CancellationToken ct)
+        => GetQrCodeImageInternalAsync(tenantId, providerReference, ct);
+
+    private async Task<string?> GetQrCodeImageInternalAsync(Guid? tenantId, string providerReference, CancellationToken ct)
+    {
+        if (!providerReference.StartsWith("pi_", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var credentials = await GetCredentialsAsync(tenantId, ct);
+        using var response = await _http.SendAsync(
+            CreateRequest(HttpMethod.Get, $"payment_intents/{providerReference}", credentials), ct);
+        await EnsureSuccessAsync(response, "get QR payment intent", ct);
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        var attributes = doc.RootElement.GetProperty("data").GetProperty("attributes");
+        return attributes.TryGetProperty("next_action", out var nextAction) &&
+               nextAction.TryGetProperty("code", out var code) &&
+               code.TryGetProperty("image_url", out var image)
+            ? image.GetString()
+            : null;
+    }
+
     public Task<PaymentStatusResult> GetPaymentStatusAsync(string providerReference, CancellationToken ct)
         => GetPaymentStatusInternalAsync(null, providerReference, ct);
 
@@ -103,6 +222,9 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
     private async Task<PaymentStatusResult> GetPaymentStatusInternalAsync(Guid? tenantId, string providerReference, CancellationToken ct)
     {
         var credentials = await GetCredentialsAsync(tenantId, ct);
+        if (providerReference.StartsWith("pi_", StringComparison.OrdinalIgnoreCase))
+            return await GetDynamicQrPaymentStatusAsync(credentials, providerReference, ct);
+
         using var response = await _http.SendAsync(
             CreateRequest(HttpMethod.Get, $"checkout_sessions/{providerReference}", credentials), ct);
         await EnsureSuccessAsync(response, "get checkout", ct);
@@ -139,6 +261,59 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
         return new PaymentStatusResult(PaymentStatus.Pending, null, null, null, null);
     }
 
+    private async Task<PaymentStatusResult> GetDynamicQrPaymentStatusAsync(
+        ResolvedPayMongoCredentials credentials, string providerReference, CancellationToken ct)
+    {
+        using var response = await _http.SendAsync(
+            CreateRequest(HttpMethod.Get, $"payment_intents/{providerReference}", credentials), ct);
+        await EnsureSuccessAsync(response, "get QR payment status", ct);
+
+        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        var attributes = doc.RootElement.GetProperty("data").GetProperty("attributes");
+        var intentStatus = attributes.TryGetProperty("status", out var statusElement)
+            ? statusElement.GetString()
+            : null;
+
+        if (attributes.TryGetProperty("payments", out var payments) &&
+            payments.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var payment in payments.EnumerateArray())
+            {
+                var paymentAttributes = payment.TryGetProperty("attributes", out var pa) ? pa : default;
+                if (paymentAttributes.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var paymentStatus = paymentAttributes.TryGetProperty("status", out var ps)
+                    ? ps.GetString()
+                    : null;
+                if (paymentStatus == "paid")
+                {
+                    return new PaymentStatusResult(
+                        PaymentStatus.Paid,
+                        payment.TryGetProperty("id", out var paymentId) ? paymentId.GetString() : null,
+                        FromCentavos(paymentAttributes),
+                        paymentAttributes.TryGetProperty("currency", out var currency) ? currency.GetString() : null,
+                        ReadPaymentMethod(paymentAttributes));
+                }
+            }
+        }
+
+        if (intentStatus == "succeeded")
+            return new PaymentStatusResult(
+                PaymentStatus.Paid,
+                null,
+                FromCentavos(attributes),
+                attributes.TryGetProperty("currency", out var succeededCurrency) ? succeededCurrency.GetString() : null,
+                "qrph");
+
+        if (intentStatus is "awaiting_payment_method" or "cancelled" or "failed")
+            return new PaymentStatusResult(
+                intentStatus == "failed" ? PaymentStatus.Failed : PaymentStatus.Expired,
+                null, null, null, null);
+
+        return new PaymentStatusResult(PaymentStatus.Pending, null, null, null, "qrph");
+    }
+
     public Task ExpireCheckoutAsync(string providerReference, CancellationToken ct)
         => ExpireCheckoutInternalAsync(null, providerReference, ct);
 
@@ -147,6 +322,12 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
 
     private async Task ExpireCheckoutInternalAsync(Guid? tenantId, string providerReference, CancellationToken ct)
     {
+        // Dynamic QR Payment Intents expire their attached QR code at PayMongo.
+        // Closing the local attempt is sufficient; there is no checkout-session
+        // expire endpoint for this flow.
+        if (providerReference.StartsWith("pi_", StringComparison.OrdinalIgnoreCase))
+            return;
+
         var credentials = await GetCredentialsAsync(tenantId, ct);
         using var response = await _http.SendAsync(
             CreateRequest(HttpMethod.Post, $"checkout_sessions/{providerReference}/expire", credentials), ct);
@@ -185,7 +366,8 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
             var resource = eventAttr.GetProperty("data");
             var resourceAttr = resource.GetProperty("attributes");
 
-            // checkout_session.payment.paid carries the checkout id and its payment(s).
+            // Hosted Checkout events carry a checkout-session id. Direct Payment
+            // Intent events carry payment_intent_id on the payment resource.
             var mapped = eventType is "checkout_session.payment.paid" or "payment.paid"
                 ? PaymentStatus.Paid
                 : (PaymentStatus?)null;
@@ -213,6 +395,9 @@ public sealed class PayMongoPaymentGateway : IPaymentGateway
                 amount = FromCentavos(resourceAttr);
                 currency = resourceAttr.TryGetProperty("currency", out var c) ? c.GetString() : null;
                 method = ReadPaymentMethod(resourceAttr);
+                checkoutId = resourceAttr.TryGetProperty("payment_intent_id", out var intentId)
+                    ? intentId.GetString()
+                    : null;
             }
 
             return new WebhookVerificationResult(

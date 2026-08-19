@@ -114,6 +114,16 @@ public sealed class AppDbContext : DbContext, IApplicationDbContext
             cancellationToken);
     }
 
+    public async Task LockFeeQuoteAsync(Guid feeQuoteId, CancellationToken cancellationToken = default)
+    {
+        if (Database.ProviderName?.Contains("InMemory", StringComparison.OrdinalIgnoreCase) == true)
+            return;
+
+        await Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT 1 FROM fee_quotes WHERE \"Id\" = {feeQuoteId} FOR UPDATE",
+            cancellationToken);
+    }
+
     public async Task LockTenantAsync(Guid tenantId, CancellationToken cancellationToken = default)
     {
         if (Database.ProviderName?.Contains("InMemory", StringComparison.OrdinalIgnoreCase) == true)

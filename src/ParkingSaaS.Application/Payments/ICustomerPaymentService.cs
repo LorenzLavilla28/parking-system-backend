@@ -10,6 +10,10 @@ public interface ICustomerPaymentService
     Task<CheckoutResponse> CreateCheckoutAsync(
         StartCheckoutRequest request, string? ipAddress, string? deviceInformation, CancellationToken ct);
 
+    /// <summary>Creates (or reuses) a PayMongo dynamic QR Ph payment for a fee quote.</summary>
+    Task<CheckoutResponse> CreateDynamicQrAsync(
+        StartCheckoutRequest request, string? ipAddress, string? deviceInformation, CancellationToken ct);
+
     /// <summary>Returns the current payment status for the public reference (status-page polling).</summary>
     Task<PaymentStatusResponse> GetStatusAsync(string paymentReference, CancellationToken ct);
 }

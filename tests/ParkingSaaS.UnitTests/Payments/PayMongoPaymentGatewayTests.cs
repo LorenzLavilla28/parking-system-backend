@@ -81,6 +81,28 @@ public sealed class PayMongoPaymentGatewayTests
         MethodTypes(handler.LastBody!).Should().Contain("gcash").And.Contain("qrph");
     }
 
+    [Fact]
+    public async Task Dynamic_qr_creates_intent_method_and_attaches_the_method()
+    {
+        var handler = new SequencedHandler(
+            "{\"data\":{\"id\":\"pi_123\",\"attributes\":{\"client_key\":\"pi_123_client\"}}}",
+            "{\"data\":{\"id\":\"pm_123\"}}",
+            "{\"data\":{\"id\":\"pi_123\",\"attributes\":{\"next_action\":{\"code\":{\"image_url\":\"data:image/png;base64,QQ==\"}}}}}");
+        var options = new PayMongoOptions();
+        var gateway = new PayMongoPaymentGateway(
+            new HttpClient(handler), Options.Create(options), new StaticCredentialsResolver(options),
+            NullLogger<PayMongoPaymentGateway>.Instance);
+
+        var result = await gateway.CreateDynamicQrAsync(Request, CancellationToken.None);
+
+        result.ProviderCheckoutId.Should().Be("pi_123");
+        result.QrCodeImageUrl.Should().Be("data:image/png;base64,QQ==");
+        handler.Paths.Should().Equal("v1/payment_intents", "v1/payment_methods", "v1/payment_intents/pi_123/attach");
+        handler.Bodies[0].Should().Contain("\"payment_method_allowed\":[\"qrph\"]");
+        handler.Bodies[1].Should().Contain("\"type\":\"qrph\"");
+        handler.Bodies[2].Should().Contain("\"payment_method\":\"pm_123\"");
+    }
+
     private static List<string> MethodTypes(string body)
     {
         using var doc = JsonDocument.Parse(body);
@@ -116,6 +138,26 @@ public sealed class PayMongoPaymentGatewayTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(_responseJson, Encoding.UTF8, "application/json")
+            };
+        }
+    }
+
+    private sealed class SequencedHandler : HttpMessageHandler
+    {
+        private readonly Queue<string> _responses;
+        public List<string> Paths { get; } = new();
+        public List<string> Bodies { get; } = new();
+
+        public SequencedHandler(params string[] responses) => _responses = new(responses);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Paths.Add(request.RequestUri!.AbsolutePath.Trim('/'));
+            Bodies.Add(request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken));
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(_responses.Dequeue(), Encoding.UTF8, "application/json")
             };
         }
     }

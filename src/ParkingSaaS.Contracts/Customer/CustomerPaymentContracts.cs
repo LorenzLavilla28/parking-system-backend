@@ -7,7 +7,9 @@ public sealed record CheckoutResponse(
     string PaymentReference,
     string CheckoutUrl,
     decimal Amount,
-    string Currency);
+    string Currency,
+    string? QrCodeImageUrl = null,
+    DateTimeOffset? ExpiresAt = null);
 
 /// <summary>Polled by the success page until the backend confirms the payment.</summary>
 public sealed record PaymentStatusResponse(

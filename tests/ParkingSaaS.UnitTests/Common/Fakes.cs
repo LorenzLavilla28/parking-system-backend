@@ -137,8 +137,10 @@ public sealed class FakePaymentGateway : IPaymentGateway
         new(true, "evt_1", "checkout_session.payment.paid", "cs_test_123", "pay_1", PaymentStatus.Paid, 90m, "PHP", "card");
 
     public int CreateCalls { get; private set; }
+    public int DynamicQrCalls { get; private set; }
     public int ExpireCalls { get; private set; }
     public CreateCheckoutRequest? LastCreateRequest { get; private set; }
+    public string? QrCodeImageUrl { get; set; } = "data:image/png;base64,QQ==";
 
     public Task<CreateCheckoutResult> CreateCheckoutAsync(CreateCheckoutRequest request, CancellationToken ct)
     {
@@ -149,6 +151,28 @@ public sealed class FakePaymentGateway : IPaymentGateway
 
     public Task<CreateCheckoutResult> CreateCheckoutAsync(Guid tenantId, CreateCheckoutRequest request, CancellationToken ct)
         => CreateCheckoutAsync(request, ct);
+
+    public Task<CreateCheckoutResult> CreateDynamicQrAsync(CreateCheckoutRequest request, CancellationToken ct)
+    {
+        DynamicQrCalls++;
+        LastCreateRequest = request;
+        return Task.FromResult(CheckoutResult with
+        {
+            ProviderCheckoutId = "pi_test_123",
+            CheckoutUrl = string.Empty,
+            RawProviderReference = "pi_test_123",
+            QrCodeImageUrl = QrCodeImageUrl
+        });
+    }
+
+    public Task<CreateCheckoutResult> CreateDynamicQrAsync(Guid tenantId, CreateCheckoutRequest request, CancellationToken ct)
+        => CreateDynamicQrAsync(request, ct);
+
+    public Task<string?> GetQrCodeImageAsync(string providerReference, CancellationToken ct)
+        => Task.FromResult(QrCodeImageUrl);
+
+    public Task<string?> GetQrCodeImageAsync(Guid tenantId, string providerReference, CancellationToken ct)
+        => GetQrCodeImageAsync(providerReference, ct);
 
     public Task<PaymentStatusResult> GetPaymentStatusAsync(string providerReference, CancellationToken ct)
         => Task.FromResult(StatusResult);

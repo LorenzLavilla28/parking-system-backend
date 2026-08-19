@@ -13,7 +13,7 @@ using ParkingSaaS.Domain.Sessions;
 namespace ParkingSaaS.Application.Payments;
 
 /// <summary>
-/// Creates PayMongo hosted-checkout sessions from immutable fee quotes and serves
+/// Creates PayMongo payment attempts from immutable fee quotes and serves
 /// status-page polling. Idempotent on a quote: a second checkout request for the
 /// same active quote returns the existing pending checkout rather than charging
 /// twice. The amount always comes from the quote, never from the client.
@@ -25,6 +25,7 @@ namespace ParkingSaaS.Application.Payments;
 /// </summary>
 public sealed class CustomerPaymentService : ICustomerPaymentService
 {
+    private static readonly TimeSpan DynamicQrLifetime = TimeSpan.FromMinutes(30);
     private readonly IApplicationDbContext _db;
     private readonly IPaymentGateway _gateway;
     private readonly IPaymentSettler _settler;
@@ -65,92 +66,129 @@ public sealed class CustomerPaymentService : ICustomerPaymentService
 
     public async Task<CheckoutResponse> CreateCheckoutAsync(
         StartCheckoutRequest request, string? ipAddress, string? deviceInformation, CancellationToken ct)
+        => await CreatePaymentAsync(request, useDynamicQr: false, ipAddress, deviceInformation, ct);
+
+    public async Task<CheckoutResponse> CreateDynamicQrAsync(
+        StartCheckoutRequest request, string? ipAddress, string? deviceInformation, CancellationToken ct)
+        => await CreatePaymentAsync(request, useDynamicQr: true, ipAddress, deviceInformation, ct);
+
+    private async Task<CheckoutResponse> CreatePaymentAsync(
+        StartCheckoutRequest request, bool useDynamicQr, string? ipAddress, string? deviceInformation, CancellationToken ct)
     {
-        var now = _clock.UtcNow;
-
-        var quote = await _db.FeeQuotes
-            .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(q => q.Id == request.FeeQuoteId, ct)
-            ?? throw new NotFoundException("Fee quote not found.");
-
-        if (!quote.IsActive(now))
-            throw new ConflictException("This fee quote has expired. Please refresh the fee and try again.");
-        if (quote.TotalAmount <= 0m)
-            throw new ConflictException("No payment is required for this session.");
-
-        if (await _payMongoCredentials.ResolveAsync(quote.TenantId, ct) is null)
-            throw new ConflictException(
-                "Online PayMongo payments are not configured for this tenant. Please pay at the parking attendant.");
-
-        var session = await _db.ParkingSessions
-            .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(s => s.Id == quote.ParkingSessionId, ct)
-            ?? throw new NotFoundException("Parking session not found.");
-
-        // Idempotency: reuse an existing open checkout for this quote.
-        var existing = await _db.Payments
-            .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(p => p.FeeQuoteId == quote.Id && (p.Status == PaymentStatus.Pending || p.Status == PaymentStatus.Processing), ct);
-
-        if (existing is { ProviderCheckoutUrl: not null and not "" })
+        CheckoutResponse response = null!;
+        await _db.ExecuteInTransactionAsync(async txct =>
         {
-            var existingReference = _tokens.Unprotect(existing.PublicReferenceProtected);
-            return new CheckoutResponse(existingReference, existing.ProviderCheckoutUrl, existing.Amount, existing.Currency);
-        }
+            await _db.LockFeeQuoteAsync(request.FeeQuoteId, txct);
 
-        // Starting a fresh checkout (typically after the customer abandoned or cancelled a
-        // previous attempt). Reconcile every earlier open checkout for this session FIRST so
-        // we never leave an orphaned still-payable checkout (double-charge) AND never cancel
-        // one the customer actually completed — we verify each at PayMongo before releasing it.
-        await SupersedeOpenCheckoutsAsync(session.Id, now, ct);
+            var now = _clock.UtcNow;
+            var quote = await _db.FeeQuotes
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(q => q.Id == request.FeeQuoteId, txct)
+                ?? throw new NotFoundException("Fee quote not found.");
 
-        var reference = _tokens.GeneratePublicToken();
-        var idempotencyKey = $"quote-{quote.Id:N}";
+            if (!quote.IsActive(now))
+                throw new ConflictException("This fee quote has expired. Please refresh the fee and try again.");
+            if (quote.TotalAmount <= 0m)
+                throw new ConflictException("No payment is required for this session.");
 
-        var payment = Payment.CreateOnlinePending(
-            quote.TenantId, session.Id, quote.Id, quote.Currency, quote.TotalAmount,
-            _tokens.Hash(reference), _tokens.Protect(reference), idempotencyKey,
-            customerEmail: request.Email);
+            if (await _payMongoCredentials.ResolveAsync(quote.TenantId, txct) is null)
+                throw new ConflictException(
+                    "Online PayMongo payments are not configured for this tenant. Please pay at the parking attendant.");
 
-        var checkout = await _gateway.CreateCheckoutAsync(payment.TenantId, new CreateCheckoutRequest(
-            Currency: quote.Currency,
-            Amount: quote.TotalAmount,
-            Description: $"Parking payment ({session.PlateNumberRaw})",
-            LineItemName: "Parking fee",
-            ReferenceNumber: payment.Id.ToString("N"),
-            SuccessUrl: _urls.PaymentStatusPath(reference),
-            CancelUrl: _urls.SessionPath(_tokens.Unprotect(session.PublicTokenProtected)),
-            IdempotencyKey: idempotencyKey,
-            CustomerEmail: request.Email), ct);
+            var session = await _db.ParkingSessions
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(s => s.Id == quote.ParkingSessionId, txct)
+                ?? throw new NotFoundException("Parking session not found.");
 
-        payment.SetCheckoutSession(checkout.ProviderCheckoutId, checkout.CheckoutUrl);
-        payment.SetProviderAccountId(checkout.ProviderAccountId);
-        session.MarkPaymentPending();
+            // Idempotency: the fee-quote row lock serializes concurrent requests across
+            // API instances, so only one request can create an open checkout for a quote.
+            var existing = await _db.Payments
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(p => p.FeeQuoteId == quote.Id && (p.Status == PaymentStatus.Pending || p.Status == PaymentStatus.Processing), txct);
 
-        await _db.Payments.AddAsync(payment, ct);
-        if (_audit is not null)
-        {
-            await _audit.AddAsync(
-                payment.TenantId, session.ParkingLocationId, "OnlineCheckoutCreated",
-                nameof(Payment), payment.Id.ToString(), oldValues: null,
-                new
+            if (existing is { ProviderCheckoutSessionId: not null and not "" })
+            {
+                var existingReference = _tokens.Unprotect(existing.PublicReferenceProtected);
+                if (!useDynamicQr && !string.IsNullOrWhiteSpace(existing.ProviderCheckoutUrl))
                 {
-                    payment.Provider,
-                    payment.Amount,
-                    payment.Currency,
-                    payment.Status,
-                    payment.FeeQuoteId,
-                    payment.CustomerEmail,
-                    payment.ProviderCheckoutSessionId
-                },
-                reason: null, new AuditContext(ipAddress, deviceInformation), ct);
-        }
-        await _db.SaveChangesAsync(ct);
+                    response = new CheckoutResponse(existingReference, existing.ProviderCheckoutUrl, existing.Amount, existing.Currency);
+                    return;
+                }
 
-        _logger.LogInformation("Checkout {CheckoutId} created for session {SessionId} ({Amount} {Currency})",
-            checkout.ProviderCheckoutId, session.Id, quote.TotalAmount, quote.Currency);
+                if (useDynamicQr || string.IsNullOrWhiteSpace(existing.ProviderCheckoutUrl))
+                {
+                    var existingQr = await _gateway.GetQrCodeImageAsync(
+                        existing.TenantId, existing.ProviderCheckoutSessionId, txct);
+                    if (!string.IsNullOrWhiteSpace(existingQr))
+                    {
+                        response = new CheckoutResponse(existingReference, string.Empty, existing.Amount, existing.Currency,
+                            existingQr, existing.CreatedAt.Add(DynamicQrLifetime));
+                        return;
+                    }
+                }
+            }
 
-        return new CheckoutResponse(reference, checkout.CheckoutUrl, payment.Amount, payment.Currency);
+            // Starting a fresh checkout (typically after the customer abandoned or cancelled a
+            // previous attempt). Reconcile every earlier open checkout for this session FIRST so
+            // we never leave an orphaned still-payable checkout (double-charge) AND never cancel
+            // one the customer actually completed — we verify each at PayMongo before releasing it.
+            await SupersedeOpenCheckoutsAsync(session.Id, now, txct);
+
+            var reference = _tokens.GeneratePublicToken();
+            var idempotencyKey = $"quote-{quote.Id:N}";
+
+            var payment = Payment.CreateOnlinePending(
+                quote.TenantId, session.Id, quote.Id, quote.Currency, quote.TotalAmount,
+                _tokens.Hash(reference), _tokens.Protect(reference), idempotencyKey,
+                customerEmail: request.Email);
+
+            var paymentRequest = new CreateCheckoutRequest(
+                Currency: quote.Currency,
+                Amount: quote.TotalAmount,
+                Description: $"Parking payment ({session.PlateNumberRaw})",
+                LineItemName: "Parking fee",
+                ReferenceNumber: payment.Id.ToString("N"),
+                SuccessUrl: _urls.PaymentStatusPath(reference),
+                CancelUrl: _urls.SessionPath(_tokens.Unprotect(session.PublicTokenProtected)),
+                IdempotencyKey: idempotencyKey,
+                CustomerEmail: request.Email);
+
+            var checkout = useDynamicQr
+                ? await _gateway.CreateDynamicQrAsync(payment.TenantId, paymentRequest, txct)
+                : await _gateway.CreateCheckoutAsync(payment.TenantId, paymentRequest, txct);
+
+            payment.SetCheckoutSession(checkout.ProviderCheckoutId, checkout.CheckoutUrl);
+            payment.SetProviderAccountId(checkout.ProviderAccountId);
+            session.MarkPaymentPending();
+
+            await _db.Payments.AddAsync(payment, txct);
+            if (_audit is not null)
+            {
+                await _audit.AddAsync(
+                    payment.TenantId, session.ParkingLocationId, "OnlineCheckoutCreated",
+                    nameof(Payment), payment.Id.ToString(), oldValues: null,
+                    new
+                    {
+                        payment.Provider,
+                        payment.Amount,
+                        payment.Currency,
+                        payment.Status,
+                        payment.FeeQuoteId,
+                        payment.CustomerEmail,
+                        payment.ProviderCheckoutSessionId
+                    },
+                    reason: null, new AuditContext(ipAddress, deviceInformation), txct);
+            }
+            await _db.SaveChangesAsync(txct);
+
+            _logger.LogInformation("Checkout {CheckoutId} created for session {SessionId} ({Amount} {Currency})",
+                checkout.ProviderCheckoutId, session.Id, quote.TotalAmount, quote.Currency);
+
+            response = new CheckoutResponse(reference, checkout.CheckoutUrl, payment.Amount, payment.Currency,
+                checkout.QrCodeImageUrl, useDynamicQr ? now.Add(DynamicQrLifetime) : null);
+        }, ct);
+
+        return response;
     }
 
     public async Task<PaymentStatusResponse> GetStatusAsync(string paymentReference, CancellationToken ct)

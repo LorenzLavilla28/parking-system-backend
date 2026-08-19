@@ -37,6 +37,7 @@ public interface IApplicationDbContext
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task ExecuteInTransactionAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default);
+    Task LockFeeQuoteAsync(Guid feeQuoteId, CancellationToken cancellationToken = default);
     Task LockLocationAsync(Guid locationId, CancellationToken cancellationToken = default);
     Task LockTenantAsync(Guid tenantId, CancellationToken cancellationToken = default);
 }

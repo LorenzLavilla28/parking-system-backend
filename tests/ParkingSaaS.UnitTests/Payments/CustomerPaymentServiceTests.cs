@@ -81,6 +81,25 @@ public sealed class CustomerPaymentServiceTests
     }
 
     [Fact]
+    public async Task Create_dynamic_qr_persists_pending_payment_and_returns_image()
+    {
+        var quote = SeedQuote(90m, _clock.UtcNow.AddMinutes(10));
+
+        var response = await _service.CreateDynamicQrAsync(
+            new StartCheckoutRequest(quote.Id, "buyer@example.com"), null, null, CancellationToken.None);
+
+        response.CheckoutUrl.Should().BeEmpty();
+        response.QrCodeImageUrl.Should().Be("data:image/png;base64,QQ==");
+        response.Amount.Should().Be(90m);
+        _gateway.DynamicQrCalls.Should().Be(1);
+
+        var payment = await _db.Payments.IgnoreQueryFilters().SingleAsync();
+        payment.ProviderCheckoutSessionId.Should().Be("pi_test_123");
+        payment.ProviderCheckoutUrl.Should().BeEmpty();
+        payment.Status.Should().Be(PaymentStatus.Pending);
+    }
+
+    [Fact]
     public async Task Create_checkout_requires_tenant_paymongo_credentials()
     {
         var quote = SeedQuote(90m, _clock.UtcNow.AddMinutes(10));
