@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ParkingSaaS.Application.Abstractions;
+using ParkingSaaS.Application.Benefits;
 using ParkingSaaS.Application.Audit;
 using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Application.Payments;
@@ -31,12 +32,14 @@ public sealed class GuardExitService : IGuardExitService
     private readonly IPaymentCheckoutCleanupService _checkoutCleanup;
     private readonly IParkingTokenService _tokens;
     private readonly ILogger<GuardExitService> _logger;
+    private readonly ICorporateBenefitAllocationService? _benefits;
 
     public GuardExitService(
         IApplicationDbContext db, ICurrentUser user, ISessionPricingService pricing,
         IAuditLogger audit, IDateTime clock, ISessionRealtimeNotifier realtime,
         IPaymentCheckoutCleanupService checkoutCleanup, IParkingTokenService tokens,
-        ILogger<GuardExitService> logger)
+        ILogger<GuardExitService> logger,
+        ICorporateBenefitAllocationService? benefits = null)
     {
         _db = db;
         _user = user;
@@ -47,6 +50,7 @@ public sealed class GuardExitService : IGuardExitService
         _checkoutCleanup = checkoutCleanup;
         _tokens = tokens;
         _logger = logger;
+        _benefits = benefits;
     }
 
     public async Task<ExitStatusResponse> GetExitStatusAsync(Guid sessionId, CancellationToken ct)
@@ -125,6 +129,8 @@ public sealed class GuardExitService : IGuardExitService
         }
 
         session.ApproveExit(_user.UserId ?? Guid.Empty, now, finalFee, request.ExitPhotoUrl);
+        if (_benefits is not null)
+            await _benefits.ReleaseForSessionAsync(session.Id, now, ct);
 
         await _audit.AddAsync(
             session.TenantId, session.ParkingLocationId,

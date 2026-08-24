@@ -20,7 +20,10 @@ public sealed record EntryTicketResponse(
     string TicketCode,
     string PaymentUrl,
     string QrCodeDataUri,
-    string LocationName);
+    string LocationName,
+    bool CorporateBenefitApplied = false,
+    string? CorporateBenefitProgramName = null,
+    string? CorporateBenefitMessage = null);
 
 public sealed record SessionSummaryResponse(
     Guid Id,
@@ -37,7 +40,8 @@ public sealed record SessionSummaryResponse(
     decimal Outstanding,
     decimal? FinalFee,
     decimal TotalPaid,
-    DateTimeOffset? PaidExitDeadline);
+    DateTimeOffset? PaidExitDeadline,
+    bool CorporateBenefitApplied = false);
 
 public sealed record SessionSearchResponse(
     IReadOnlyList<SessionSummaryResponse> Items,

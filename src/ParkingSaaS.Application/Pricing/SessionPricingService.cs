@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using ParkingSaaS.Application.Abstractions;
+using ParkingSaaS.Domain.Benefits;
 using ParkingSaaS.Domain.Pricing;
 using ParkingSaaS.Domain.Sessions;
 
@@ -69,8 +70,28 @@ public sealed class SessionPricingService : ISessionPricingService
             // subtracting grace gives the point at which billing may resume.
             calculationTime = new[] { at, deadline.AddMinutes(-rules.PaidExitGraceMinutes) }.Min();
         }
+
+        IReadOnlyList<FreeTimeInterval>? freeIntervals = null;
+        if (session.CorporateBenefitAllocationId is { } allocationId)
+        {
+            var allocation = await _db.CorporateBenefitAllocations
+                .IgnoreQueryFilters().AsNoTracking()
+                .FirstOrDefaultAsync(a => a.Id == allocationId && a.ParkingSessionId == session.Id, ct);
+            if (allocation is not null && allocation.PlateNumberNormalized == session.PlateNumberNormalized)
+            {
+                var benefitVersion = await _db.CorporateBenefitProgramVersions
+                    .IgnoreQueryFilters().AsNoTracking()
+                    .FirstOrDefaultAsync(v => v.Id == allocation.CorporateBenefitProgramVersionId, ct);
+                if (benefitVersion is not null)
+                {
+                    var benefitRules = CorporateBenefitRules.Parse(benefitVersion.RulesJson);
+                    if (benefitRules.IsVehicleEligible(session.VehicleType))
+                        freeIntervals = benefitRules.GetFreeIntervals(session.EntryTime, calculationTime, timezone);
+                }
+            }
+        }
         var input = new FeeCalculationInput(
-            session.EntryTime, calculationTime, session.VehicleType, version.Id, version.VersionNumber, rules, timezone, discount);
+            session.EntryTime, calculationTime, session.VehicleType, version.Id, version.VersionNumber, rules, timezone, discount, freeIntervals);
 
         return _calculator.Calculate(input);
     }

@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Audit;
 using ParkingSaaS.Application.Auth;
+using ParkingSaaS.Application.Benefits;
 using ParkingSaaS.Application.Customer;
 using ParkingSaaS.Application.Emails;
 using ParkingSaaS.Application.Guard;
@@ -26,6 +27,8 @@ public static class DependencyInjection
 
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<ILocationService, LocationService>();
+        services.AddScoped<ICorporateBenefitService, CorporateBenefitService>();
+        services.AddScoped<ICorporateBenefitAllocationService, CorporateBenefitAllocationService>();
         services.AddScoped<IUserService, UserService>();
         services.AddScoped<ITenantProvisioningService, TenantProvisioningService>();
         services.AddScoped<ITenantBrandingService, TenantBrandingService>();

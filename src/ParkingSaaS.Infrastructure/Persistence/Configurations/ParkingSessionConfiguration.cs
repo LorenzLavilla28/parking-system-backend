@@ -17,6 +17,7 @@ public sealed class ParkingSessionConfiguration : IEntityTypeConfiguration<Parki
 
         b.Property(s => s.TenantId).IsRequired();
         b.Property(s => s.ParkingLocationId).IsRequired();
+        b.Property(s => s.CorporateBenefitAllocationId);
         b.Property(s => s.PlateNumberRaw).HasMaxLength(32).IsRequired();
         b.Property(s => s.PlateNumberNormalized).HasMaxLength(32).IsRequired();
         b.Property(s => s.VehicleType).HasConversion<string>().HasMaxLength(20);
@@ -51,6 +52,7 @@ public sealed class ParkingSessionConfiguration : IEntityTypeConfiguration<Parki
         b.HasIndex(s => new { s.ParkingLocationId, s.TicketCodeHash });
         b.HasIndex(s => s.EntryTime);
         b.HasIndex(s => s.ExitTime);
+        b.HasIndex(s => s.CorporateBenefitAllocationId).IsUnique();
 
         // At most one ACTIVE session per (location, normalized plate). A partial
         // unique index lets the same plate re-enter after a prior session closes.

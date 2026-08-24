@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ParkingSaaS.Application.Abstractions;
+using ParkingSaaS.Application.Benefits;
 using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Application.Common.Options;
 using ParkingSaaS.Application.Pricing;
@@ -31,6 +32,7 @@ public sealed class GuardEntryService : IGuardEntryService
     private readonly ISessionRealtimeNotifier _realtime;
     private readonly PublicUrlOptions _urls;
     private readonly ILogger<GuardEntryService> _logger;
+    private readonly ICorporateBenefitAllocationService? _benefits;
 
     public GuardEntryService(
         IApplicationDbContext db,
@@ -42,7 +44,8 @@ public sealed class GuardEntryService : IGuardEntryService
         IDateTime clock,
         ISessionRealtimeNotifier realtime,
         IOptions<PublicUrlOptions> urls,
-        ILogger<GuardEntryService> logger)
+        ILogger<GuardEntryService> logger,
+        ICorporateBenefitAllocationService? benefits = null)
     {
         _db = db;
         _user = user;
@@ -54,6 +57,7 @@ public sealed class GuardEntryService : IGuardEntryService
         _realtime = realtime;
         _urls = urls.Value;
         _logger = logger;
+        _benefits = benefits;
     }
 
     public async Task<EntryTicketResponse> RecordEntryAsync(RecordEntryRequest request, CancellationToken ct)
@@ -71,6 +75,7 @@ public sealed class GuardEntryService : IGuardEntryService
         ParkingSession session = null!;
         string publicToken = string.Empty;
         string ticketCode = string.Empty;
+        BenefitAllocationDecision? benefitDecision = null;
 
         await _db.ExecuteInTransactionAsync(async txct =>
         {
@@ -120,6 +125,14 @@ public sealed class GuardEntryService : IGuardEntryService
                 throw new ConflictException("rate_plan_required: the location must have an active rate plan version before accepting entries.");
             session.SetRatePlanVersion(v);
 
+            if (_benefits is not null)
+            {
+                benefitDecision = await _benefits.TryAllocateAsync(
+                    location.TenantId, location.Id, session.Id, normalized, vehicleType, session.EntryTime, txct);
+                if (benefitDecision.Applied && benefitDecision.AllocationId is { } allocationId)
+                    session.SetCorporateBenefitAllocation(allocationId);
+            }
+
             publicToken = _tokens.GeneratePublicToken();
             ticketCode = _tokens.GenerateTicketCode();
             session.AssignTokens(
@@ -156,7 +169,10 @@ public sealed class GuardEntryService : IGuardEntryService
             ticketCode,
             paymentUrl,
             _qr.GeneratePngDataUri(paymentUrl),
-            location.Name);
+            location.Name,
+            benefitDecision?.Applied ?? false,
+            benefitDecision?.ProgramName,
+            benefitDecision?.Message);
     }
 
     private static bool IsUniqueViolation(DbUpdateException ex)

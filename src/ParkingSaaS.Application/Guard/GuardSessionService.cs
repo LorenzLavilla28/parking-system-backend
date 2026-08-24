@@ -212,6 +212,7 @@ public sealed class GuardSessionService : IGuardSessionService
             outstanding,
             s.FinalFee,
             s.TotalPaid,
-            s.PaidExitDeadline);
+            s.PaidExitDeadline,
+            s.CorporateBenefitAllocationId is not null);
     }
 }

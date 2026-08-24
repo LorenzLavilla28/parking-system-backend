@@ -26,7 +26,9 @@ public sealed record DashboardSummaryResponse(
     decimal OverrideCashRevenue,
     int OverrideCashPaymentCount,
     double OldestActiveSessionMinutes = 0d,
-    int MaximumCapacity = 0);
+    int MaximumCapacity = 0,
+    int CorporateBenefitSessions = 0,
+    decimal CorporateBenefitValue = 0m);
 
 public sealed record RevenuePointResponse(
     DateTimeOffset Date,

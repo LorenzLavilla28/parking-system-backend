@@ -179,6 +179,19 @@ public sealed class DashboardReportService : IDashboardReportService
                 && s.FeeOverride == 0m
                 && s.Status != ParkingSessionStatus.Void
                 && s.Status != ParkingSessionStatus.Cancelled, ct);
+        var corporateBenefitSessions = await sessionsQuery
+            .CountAsync(s => s.EntryTime >= periodStart && s.EntryTime < periodEnd && s.CorporateBenefitAllocationId != null, ct);
+        var corporateBenefitValue = 0m;
+        var benefitSessions = await sessionsQuery
+            .Where(s => s.EntryTime >= periodStart && s.EntryTime < periodEnd && s.CorporateBenefitAllocationId != null)
+            .ToListAsync(ct);
+        foreach (var benefitSession in benefitSessions)
+        {
+            var calculationAt = benefitSession.ExitTime ?? now;
+            var calculation = await _pricing.CalculateAsync(benefitSession, calculationAt, discount: null, ct);
+            if (calculation is not null)
+                corporateBenefitValue += calculation.DiscountAmount;
+        }
         var supervisorOverrides = await _db.AuditLogs.AsNoTracking()
             .CountAsync(a => a.EntityType == nameof(ParkingSession)
                              && PaymentOverrideActions.Contains(a.Action)
@@ -216,7 +229,9 @@ public sealed class DashboardReportService : IDashboardReportService
             overrideCashRevenue,
             overrideCashPayments.Length,
             oldestActiveSessionMinutes,
-            maximumCapacity);
+            maximumCapacity,
+            corporateBenefitSessions,
+            corporateBenefitValue);
 
         return new DashboardReportResponse(periodStart, periodEnd, summary, revenue, paymentMix);
     }

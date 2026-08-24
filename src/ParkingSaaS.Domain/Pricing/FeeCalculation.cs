@@ -1,3 +1,4 @@
+using ParkingSaaS.Domain.Benefits;
 using ParkingSaaS.Domain.Sessions;
 
 namespace ParkingSaaS.Domain.Pricing;
@@ -17,7 +18,8 @@ public sealed record FeeCalculationInput(
     int RatePlanVersionNumber,
     PricingRules Rules,
     string Timezone,
-    DiscountInput? Discount = null);
+    DiscountInput? Discount = null,
+    IReadOnlyList<FreeTimeInterval>? FreeIntervals = null);
 
 /// <summary>One labelled component of the price, for transparent breakdowns.</summary>
 public sealed record PricingLineItem(string Code, string Description, decimal Amount);

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using ParkingSaaS.Domain.Audit;
+using ParkingSaaS.Domain.Benefits;
 using ParkingSaaS.Domain.Emails;
 using ParkingSaaS.Domain.Locations;
 using ParkingSaaS.Domain.Payments;
@@ -34,6 +35,11 @@ public interface IApplicationDbContext
     DbSet<WebhookEvent> WebhookEvents { get; }
     DbSet<AuditLog> AuditLogs { get; }
     DbSet<EmailMessage> Emails { get; }
+    DbSet<CorporateBenefitProgram> CorporateBenefitPrograms { get; }
+    DbSet<CorporateBenefitProgramLocation> CorporateBenefitProgramLocations { get; }
+    DbSet<CorporateBenefitProgramVersion> CorporateBenefitProgramVersions { get; }
+    DbSet<CorporateBenefitPlate> CorporateBenefitPlates { get; }
+    DbSet<CorporateBenefitAllocation> CorporateBenefitAllocations { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
     Task ExecuteInTransactionAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default);

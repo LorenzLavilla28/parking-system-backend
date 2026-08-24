@@ -24,6 +24,8 @@ public class ParkingSession : AuditableEntity, ITenantOwned
 
     /// <summary>The rate plan version pinned at entry. Populated by the pricing engine (Phase 3).</summary>
     public Guid? RatePlanVersionId { get; private set; }
+    /// <summary>Shared corporate benefit allocation granted at entry, if any.</summary>
+    public Guid? CorporateBenefitAllocationId { get; private set; }
 
     public string PublicTokenHash { get; private set; } = string.Empty;
     public string PublicTokenProtected { get; private set; } = string.Empty;
@@ -92,6 +94,13 @@ public class ParkingSession : AuditableEntity, ITenantOwned
     }
 
     public void SetRatePlanVersion(Guid ratePlanVersionId) => RatePlanVersionId = ratePlanVersionId;
+
+    public void SetCorporateBenefitAllocation(Guid allocationId)
+    {
+        if (allocationId == Guid.Empty)
+            throw new DomainException("session.benefit_allocation_invalid", "Benefit allocation is invalid.");
+        CorporateBenefitAllocationId = allocationId;
+    }
 
     /// <summary>Moves an unpaid session into the payment-pending state when a checkout is created.</summary>
     public void MarkPaymentPending()

@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Domain.Audit;
+using ParkingSaaS.Domain.Benefits;
 using ParkingSaaS.Domain.Emails;
 using ParkingSaaS.Domain.Locations;
 using ParkingSaaS.Domain.Payments;
@@ -41,6 +42,11 @@ public sealed class AppDbContext : DbContext, IApplicationDbContext
     public DbSet<WebhookEvent> WebhookEvents => Set<WebhookEvent>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<EmailMessage> Emails => Set<EmailMessage>();
+    public DbSet<CorporateBenefitProgram> CorporateBenefitPrograms => Set<CorporateBenefitProgram>();
+    public DbSet<CorporateBenefitProgramLocation> CorporateBenefitProgramLocations => Set<CorporateBenefitProgramLocation>();
+    public DbSet<CorporateBenefitProgramVersion> CorporateBenefitProgramVersions => Set<CorporateBenefitProgramVersion>();
+    public DbSet<CorporateBenefitPlate> CorporateBenefitPlates => Set<CorporateBenefitPlate>();
+    public DbSet<CorporateBenefitAllocation> CorporateBenefitAllocations => Set<CorporateBenefitAllocation>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -69,6 +75,16 @@ public sealed class AppDbContext : DbContext, IApplicationDbContext
         modelBuilder.Entity<TenantPayMongoConnection>()
             .HasQueryFilter(c => _tenant.IsPlatformAdministrator || c.TenantId == _tenant.TenantId);
         modelBuilder.Entity<AuditLog>()
+            .HasQueryFilter(a => _tenant.IsPlatformAdministrator || a.TenantId == _tenant.TenantId);
+        modelBuilder.Entity<CorporateBenefitProgram>()
+            .HasQueryFilter(p => _tenant.IsPlatformAdministrator || p.TenantId == _tenant.TenantId);
+        modelBuilder.Entity<CorporateBenefitProgramLocation>()
+            .HasQueryFilter(p => _tenant.IsPlatformAdministrator || p.TenantId == _tenant.TenantId);
+        modelBuilder.Entity<CorporateBenefitProgramVersion>()
+            .HasQueryFilter(v => _tenant.IsPlatformAdministrator || v.TenantId == _tenant.TenantId);
+        modelBuilder.Entity<CorporateBenefitPlate>()
+            .HasQueryFilter(p => _tenant.IsPlatformAdministrator || p.TenantId == _tenant.TenantId);
+        modelBuilder.Entity<CorporateBenefitAllocation>()
             .HasQueryFilter(a => _tenant.IsPlatformAdministrator || a.TenantId == _tenant.TenantId);
         // WebhookEvent is provider-global (not tenant-owned) and is intentionally unfiltered.
 

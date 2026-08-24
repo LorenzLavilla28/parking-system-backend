@@ -1,3 +1,4 @@
+using ParkingSaaS.Domain.Benefits;
 using ParkingSaaS.Domain.Sessions;
 
 namespace ParkingSaaS.Domain.Pricing;
@@ -19,51 +20,119 @@ public sealed class ParkingFeeCalculator : IParkingFeeCalculator
     public FeeCalculationResult Calculate(FeeCalculationInput input)
     {
         var rules = input.Rules;
-        var breakdown = new List<PricingLineItem>();
         var billedMinutes = (int)Math.Ceiling(Math.Max(0d, (input.CalculationTime - input.EntryTime).TotalMinutes));
 
         // Entry grace: a stay within the grace window is free.
-        if (billedMinutes <= rules.EntryGraceMinutes)
+        if (billedMinutes <= rules.EntryGraceMinutes || billedMinutes <= 0)
         {
+            var breakdown = new List<PricingLineItem>();
             breakdown.Add(new PricingLineItem("entry_grace", $"Within {rules.EntryGraceMinutes}-minute entry grace", 0m));
             return Result(input, 0m, 0m, 0m, breakdown);
         }
+
+        var normal = ComputeCharges(rules, input, billedMinutes, includeBreakdown: true);
+        var subtotal = normal.BaseAmount + normal.AdditionalAmount;
+
+        // A corporate benefit is a time entitlement, not a client-supplied
+        // percentage/fixed discount. Calculate the remaining non-free elapsed
+        // duration first, then round that duration once using the tariff's
+        // existing minute billing rule. This is important for a stay that is
+        // only a few seconds old: a fully covered stay must be free immediately,
+        // while a stay that crosses the end of the window must still pay for
+        // the non-free portion.
+        if (input.FreeIntervals is { Count: > 0 })
+        {
+            var billableMinutes = BillableMinutesAfterBenefit(
+                input.FreeIntervals, input.EntryTime, input.CalculationTime);
+            // Keep stay-level surcharges (for example overnight) anchored to
+            // the actual elapsed stay. The benefit discounts time-based
+            // parking charges, but must not accidentally erase a surcharge
+            // merely because free minutes were removed from the meter.
+            var adjusted = ComputeCharges(rules, input, billableMinutes, includeBreakdown: false, surchargeMinutes: billedMinutes);
+            var adjustedSubtotal = adjusted.BaseAmount + adjusted.AdditionalAmount;
+            var benefitDiscount = Round(Math.Clamp(subtotal - adjustedSubtotal, 0m, subtotal));
+            var breakdown = normal.Breakdown.ToList();
+            breakdown.Add(new PricingLineItem("corporate_benefit", "Corporate benefit free time", -benefitDiscount));
+            return Result(input, normal.BaseAmount, normal.AdditionalAmount, benefitDiscount, breakdown, adjustedSubtotal);
+        }
+
+        var discountAmount = ComputeDiscount(subtotal, input.Discount, normal.Breakdown);
+        var total = Round(Math.Max(0m, subtotal - discountAmount));
+        return Result(input, normal.BaseAmount, normal.AdditionalAmount, discountAmount, normal.Breakdown, total);
+    }
+
+    private static ChargeResult ComputeCharges(
+        PricingRules rules, FeeCalculationInput input, int billedMinutes, bool includeBreakdown, int? surchargeMinutes = null)
+    {
+        var breakdown = new List<PricingLineItem>();
+        if (billedMinutes <= 0)
+            return new ChargeResult(0m, 0m, breakdown);
 
         var localEntry = ToLocal(input.EntryTime, input.Timezone);
         var isWeekend = localEntry.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
         var isHoliday = rules.Holidays.Contains(localEntry.ToString("yyyy-MM-dd"));
 
         var block = SelectBlock(rules, input.VehicleType, isWeekend, isHoliday, out var blockLabel);
-        var baseAmount = ComputeBlock(block, billedMinutes, breakdown, blockLabel);
+        var baseAmount = ComputeBlock(block, billedMinutes, includeBreakdown ? breakdown : new List<PricingLineItem>(), blockLabel);
 
         // Day/holiday multipliers applied after the base computation.
         if (isHoliday && rules.HolidayMultiplier is { } hm && hm != 1m)
         {
             var delta = Round(baseAmount * hm) - baseAmount;
             baseAmount = Round(baseAmount * hm);
-            breakdown.Add(new PricingLineItem("holiday_multiplier", $"Holiday rate ×{hm}", delta));
+            if (includeBreakdown) breakdown.Add(new PricingLineItem("holiday_multiplier", $"Holiday rate ×{hm}", delta));
         }
         else if (isWeekend && rules.WeekendMultiplier is { } wm && wm != 1m)
         {
             var delta = Round(baseAmount * wm) - baseAmount;
             baseAmount = Round(baseAmount * wm);
-            breakdown.Add(new PricingLineItem("weekend_multiplier", $"Weekend rate ×{wm}", delta));
+            if (includeBreakdown) breakdown.Add(new PricingLineItem("weekend_multiplier", $"Weekend rate ×{wm}", delta));
         }
 
         // Overnight surcharge if the stay overlaps the overnight window.
         var additionalAmount = 0m;
         if (rules.Overnight is { } overnight && overnight.Fee > 0m &&
-            StayOverlapsOvernight(localEntry, billedMinutes, overnight))
+            StayOverlapsOvernight(localEntry, surchargeMinutes ?? billedMinutes, overnight))
         {
             additionalAmount += overnight.Fee;
-            breakdown.Add(new PricingLineItem("overnight", "Overnight surcharge", overnight.Fee));
+            if (includeBreakdown) breakdown.Add(new PricingLineItem("overnight", "Overnight surcharge", overnight.Fee));
         }
 
-        var subtotal = baseAmount + additionalAmount;
-        var discountAmount = ComputeDiscount(subtotal, input.Discount, breakdown);
-        var total = Round(Math.Max(0m, subtotal - discountAmount));
+        return new ChargeResult(Round(baseAmount), Round(additionalAmount), breakdown);
+    }
 
-        return Result(input, baseAmount, additionalAmount, discountAmount, breakdown, total);
+    private static int BillableMinutesAfterBenefit(
+        IReadOnlyList<FreeTimeInterval>? intervals, DateTimeOffset from, DateTimeOffset until)
+    {
+        var totalSeconds = Math.Max(0d, (until - from).TotalSeconds);
+        if (totalSeconds <= 0d) return 0;
+        if (intervals is null || intervals.Count == 0)
+            return (int)Math.Ceiling(totalSeconds / 60d);
+
+        var merged = intervals
+            .Select(i => (From: i.From < from ? from : i.From, To: i.To > until ? until : i.To))
+            .Where(i => i.To > i.From)
+            .OrderBy(i => i.From)
+            .ToList();
+        if (merged.Count == 0)
+            return (int)Math.Ceiling(totalSeconds / 60d);
+
+        var coveredSeconds = 0d;
+        var current = merged[0];
+        foreach (var next in merged.Skip(1))
+        {
+            if (next.From <= current.To)
+            {
+                if (next.To > current.To) current.To = next.To;
+                continue;
+            }
+
+            coveredSeconds += (current.To - current.From).TotalSeconds;
+            current = next;
+        }
+        coveredSeconds += (current.To - current.From).TotalSeconds;
+        var billableSeconds = Math.Max(0d, totalSeconds - coveredSeconds);
+        return (int)Math.Min(int.MaxValue, Math.Ceiling(billableSeconds / 60d));
     }
 
     private static RateBlock SelectBlock(PricingRules rules, VehicleType vehicleType, bool isWeekend, bool isHoliday, out string label)
@@ -180,6 +249,8 @@ public sealed class ParkingFeeCalculator : IParkingFeeCalculator
     }
 
     private static decimal Round(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
+
+    private sealed record ChargeResult(decimal BaseAmount, decimal AdditionalAmount, List<PricingLineItem> Breakdown);
 
     private static FeeCalculationResult Result(
         FeeCalculationInput input, decimal baseAmount, decimal additional, decimal discount,

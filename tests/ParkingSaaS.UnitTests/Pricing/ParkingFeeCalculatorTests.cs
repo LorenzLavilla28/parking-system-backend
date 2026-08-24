@@ -1,4 +1,5 @@
 using FluentAssertions;
+using ParkingSaaS.Domain.Benefits;
 using ParkingSaaS.Domain.Pricing;
 using ParkingSaaS.Domain.Sessions;
 using Xunit;
@@ -204,5 +205,88 @@ public sealed class ParkingFeeCalculatorTests
         result.Currency.Should().Be("PHP");
         result.Breakdown.Should().NotBeEmpty();
         result.Breakdown.Sum(i => i.Amount).Should().Be(result.TotalAmount);
+    }
+
+    [Fact]
+    public void Corporate_benefit_charges_only_time_outside_the_free_window()
+    {
+        var rules = CanonicalRules();
+        var entry = new DateTimeOffset(2026, 6, 24, 7, 30, 0, TimeSpan.FromHours(8));
+        var exit = entry.AddHours(13.5);
+        var freeIntervals = new CorporateBenefitRules().GetFreeIntervals(entry, exit, "Asia/Manila");
+
+        var result = _calc.Calculate(new FeeCalculationInput(
+            entry, exit, VehicleType.Car, Guid.NewGuid(), 1, rules, "Asia/Manila", null, freeIntervals));
+
+        result.TotalAmount.Should().Be(50m); // 30 minutes before + 60 minutes after the free window.
+        result.DiscountAmount.Should().Be(220m);
+        result.Breakdown.Sum(item => item.Amount).Should().Be(result.TotalAmount);
+        result.Breakdown.Should().Contain(item => item.Code == "corporate_benefit" && item.Amount == -220m);
+    }
+
+    [Fact]
+    public void Corporate_benefit_is_free_immediately_for_a_stay_inside_the_window()
+    {
+        var rules = CanonicalRules();
+        rules.EntryGraceMinutes = 0;
+        var entry = new DateTimeOffset(2026, 6, 24, 20, 3, 0, TimeSpan.FromHours(8));
+        var exit = entry.AddSeconds(10);
+        var benefit = new CorporateBenefitRules
+        {
+            Windows = new() { new CorporateBenefitTimeWindow { Start = "08:00", End = "21:00" } }
+        };
+
+        var result = _calc.Calculate(new FeeCalculationInput(
+            entry, exit, VehicleType.Car, Guid.NewGuid(), 1, rules, "Asia/Manila", null,
+            benefit.GetFreeIntervals(entry, exit, "Asia/Manila")));
+
+        result.TotalAmount.Should().Be(0m);
+        result.DiscountAmount.Should().Be(50m);
+        result.Breakdown.Should().Contain(item => item.Code == "corporate_benefit" && item.Amount == -50m);
+    }
+
+    [Fact]
+    public void Corporate_benefit_does_not_round_a_partial_non_free_tail_down_to_zero()
+    {
+        var rules = new PricingRules
+        {
+            EntryGraceMinutes = 0,
+            Default = new RateBlock { Type = RateType.PerUnit, PerUnit = IncrementUnit.Minute, PerUnitAmount = 1m }
+        };
+        var entry = new DateTimeOffset(2026, 6, 24, 19, 59, 59, TimeSpan.FromHours(8));
+        var exit = entry.AddSeconds(2);
+        var benefit = new CorporateBenefitRules
+        {
+            Windows = new() { new CorporateBenefitTimeWindow { Start = "08:00", End = "20:00" } }
+        };
+
+        var result = _calc.Calculate(new FeeCalculationInput(
+            entry, exit, VehicleType.Car, Guid.NewGuid(), 1, rules, "Asia/Manila", null,
+            benefit.GetFreeIntervals(entry, exit, "Asia/Manila")));
+
+        result.TotalAmount.Should().Be(1m);
+    }
+
+    [Fact]
+    public void Corporate_benefit_does_not_accidentally_remove_an_overnight_surcharge()
+    {
+        var rules = new PricingRules
+        {
+            Default = new RateBlock { Type = RateType.PerUnit, PerUnit = IncrementUnit.Minute, PerUnitAmount = 1m },
+            Overnight = new OvernightRule { Fee = 80m, StartHour = 22, EndHour = 6 }
+        };
+        var entry = new DateTimeOffset(2026, 6, 24, 21, 0, 0, TimeSpan.FromHours(8));
+        var exit = entry.AddHours(2);
+        var benefit = new CorporateBenefitRules
+        {
+            Windows = new() { new CorporateBenefitTimeWindow { Start = "22:00", End = "23:00" } }
+        };
+
+        var result = _calc.Calculate(new FeeCalculationInput(
+            entry, exit, VehicleType.Car, Guid.NewGuid(), 1, rules, "Asia/Manila", null,
+            benefit.GetFreeIntervals(entry, exit, "Asia/Manila")));
+
+        result.TotalAmount.Should().Be(140m); // 60 paid minutes + PHP 80 overnight surcharge.
+        result.AdditionalAmount.Should().Be(80m);
     }
 }

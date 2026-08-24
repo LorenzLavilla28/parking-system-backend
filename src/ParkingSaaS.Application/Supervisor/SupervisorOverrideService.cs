@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Audit;
+using ParkingSaaS.Application.Benefits;
 using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Application.Guard;
 using ParkingSaaS.Application.Payments;
@@ -27,11 +28,13 @@ public sealed class SupervisorOverrideService : ISupervisorOverrideService
     private readonly ISessionRealtimeNotifier _realtime;
     private readonly IPaymentCheckoutCleanupService _checkoutCleanup;
     private readonly ILogger<SupervisorOverrideService> _logger;
+    private readonly ICorporateBenefitAllocationService? _benefits;
 
     public SupervisorOverrideService(
         IApplicationDbContext db, ICurrentUser user, IPlateNormalizer plateNormalizer,
         IAuditLogger audit, IDateTime clock, ISessionRealtimeNotifier realtime,
-        IPaymentCheckoutCleanupService checkoutCleanup, ILogger<SupervisorOverrideService> logger)
+        IPaymentCheckoutCleanupService checkoutCleanup, ILogger<SupervisorOverrideService> logger,
+        ICorporateBenefitAllocationService? benefits = null)
     {
         _db = db;
         _user = user;
@@ -41,6 +44,7 @@ public sealed class SupervisorOverrideService : ISupervisorOverrideService
         _realtime = realtime;
         _checkoutCleanup = checkoutCleanup;
         _logger = logger;
+        _benefits = benefits;
     }
 
     public async Task<OverrideResponse> VoidAsync(VoidSessionRequest r, string? ip, CancellationToken ct)
@@ -109,6 +113,8 @@ public sealed class SupervisorOverrideService : ISupervisorOverrideService
 
         var before = Snapshot(session);
         await mutate(session, ct);
+        if (action is ("SessionVoided" or "PlateCorrected") && _benefits is not null)
+            await _benefits.ReleaseForSessionAsync(session.Id, _clock.UtcNow, ct);
         var after = Snapshot(session);
 
         await _audit.AddAsync(
