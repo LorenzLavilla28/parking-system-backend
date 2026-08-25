@@ -5,7 +5,8 @@ public sealed record RecordEntryRequest(
     string PlateNumber,
     string VehicleType,
     string? Notes,
-    string? EntryPhotoUrl);
+    string? EntryPhotoUrl,
+    Guid? CorporateBenefitProgramId = null);
 
 /// <summary>
 /// Returned once at entry. Carries the raw public token, ticket code, payment

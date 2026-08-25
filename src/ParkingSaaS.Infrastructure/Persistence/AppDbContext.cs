@@ -45,7 +45,6 @@ public sealed class AppDbContext : DbContext, IApplicationDbContext
     public DbSet<CorporateBenefitProgram> CorporateBenefitPrograms => Set<CorporateBenefitProgram>();
     public DbSet<CorporateBenefitProgramLocation> CorporateBenefitProgramLocations => Set<CorporateBenefitProgramLocation>();
     public DbSet<CorporateBenefitProgramVersion> CorporateBenefitProgramVersions => Set<CorporateBenefitProgramVersion>();
-    public DbSet<CorporateBenefitPlate> CorporateBenefitPlates => Set<CorporateBenefitPlate>();
     public DbSet<CorporateBenefitAllocation> CorporateBenefitAllocations => Set<CorporateBenefitAllocation>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -82,8 +81,6 @@ public sealed class AppDbContext : DbContext, IApplicationDbContext
             .HasQueryFilter(p => _tenant.IsPlatformAdministrator || p.TenantId == _tenant.TenantId);
         modelBuilder.Entity<CorporateBenefitProgramVersion>()
             .HasQueryFilter(v => _tenant.IsPlatformAdministrator || v.TenantId == _tenant.TenantId);
-        modelBuilder.Entity<CorporateBenefitPlate>()
-            .HasQueryFilter(p => _tenant.IsPlatformAdministrator || p.TenantId == _tenant.TenantId);
         modelBuilder.Entity<CorporateBenefitAllocation>()
             .HasQueryFilter(a => _tenant.IsPlatformAdministrator || a.TenantId == _tenant.TenantId);
         // WebhookEvent is provider-global (not tenant-owned) and is intentionally unfiltered.

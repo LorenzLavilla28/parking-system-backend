@@ -77,7 +77,7 @@ public sealed class SessionPricingService : ISessionPricingService
             var allocation = await _db.CorporateBenefitAllocations
                 .IgnoreQueryFilters().AsNoTracking()
                 .FirstOrDefaultAsync(a => a.Id == allocationId && a.ParkingSessionId == session.Id, ct);
-            if (allocation is not null && allocation.PlateNumberNormalized == session.PlateNumberNormalized)
+            if (allocation is not null)
             {
                 var benefitVersion = await _db.CorporateBenefitProgramVersions
                     .IgnoreQueryFilters().AsNoTracking()

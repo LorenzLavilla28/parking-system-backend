@@ -38,7 +38,6 @@ public interface IApplicationDbContext
     DbSet<CorporateBenefitProgram> CorporateBenefitPrograms { get; }
     DbSet<CorporateBenefitProgramLocation> CorporateBenefitProgramLocations { get; }
     DbSet<CorporateBenefitProgramVersion> CorporateBenefitProgramVersions { get; }
-    DbSet<CorporateBenefitPlate> CorporateBenefitPlates { get; }
     DbSet<CorporateBenefitAllocation> CorporateBenefitAllocations { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);

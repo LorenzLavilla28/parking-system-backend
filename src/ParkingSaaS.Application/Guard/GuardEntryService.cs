@@ -128,7 +128,8 @@ public sealed class GuardEntryService : IGuardEntryService
             if (_benefits is not null)
             {
                 benefitDecision = await _benefits.TryAllocateAsync(
-                    location.TenantId, location.Id, session.Id, normalized, vehicleType, session.EntryTime, txct);
+                    location.TenantId, location.Id, session.Id, vehicleType, session.EntryTime, txct,
+                    request.CorporateBenefitProgramId);
                 if (benefitDecision.Applied && benefitDecision.AllocationId is { } allocationId)
                     session.SetCorporateBenefitAllocation(allocationId);
             }

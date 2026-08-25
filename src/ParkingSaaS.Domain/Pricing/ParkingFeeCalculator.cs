@@ -52,7 +52,7 @@ public sealed class ParkingFeeCalculator : IParkingFeeCalculator
             var adjustedSubtotal = adjusted.BaseAmount + adjusted.AdditionalAmount;
             var benefitDiscount = Round(Math.Clamp(subtotal - adjustedSubtotal, 0m, subtotal));
             var breakdown = normal.Breakdown.ToList();
-            breakdown.Add(new PricingLineItem("corporate_benefit", "Corporate benefit free time", -benefitDiscount));
+            breakdown.Add(new PricingLineItem("corporate_benefit", "Complimentary parking time", -benefitDiscount));
             return Result(input, normal.BaseAmount, normal.AdditionalAmount, benefitDiscount, breakdown, adjustedSubtotal);
         }
 

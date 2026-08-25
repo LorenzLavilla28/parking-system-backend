@@ -121,47 +121,6 @@ public sealed class CorporateBenefitProgramVersion : Entity, ITenantOwned
         => EffectiveFrom <= at && (EffectiveTo is null || EffectiveTo > at);
 }
 
-/// <summary>Normalized plate membership in a tenant's benefit program.</summary>
-public sealed class CorporateBenefitPlate : AuditableEntity, ITenantOwned
-{
-    public Guid TenantId { get; private set; }
-    public Guid CorporateBenefitProgramId { get; private set; }
-    public string PlateNumberNormalized { get; private set; } = string.Empty;
-    public string PlateNumberDisplay { get; private set; } = string.Empty;
-    public bool IsActive { get; private set; } = true;
-    public DateTimeOffset EffectiveFrom { get; private set; }
-    public DateTimeOffset? EffectiveTo { get; private set; }
-
-    private CorporateBenefitPlate() { }
-
-    public CorporateBenefitPlate(
-        Guid tenantId, Guid programId, string normalizedPlate, string displayPlate, DateTimeOffset effectiveFrom)
-    {
-        TenantId = tenantId;
-        CorporateBenefitProgramId = programId;
-        PlateNumberNormalized = normalizedPlate;
-        PlateNumberDisplay = displayPlate.Trim();
-        EffectiveFrom = effectiveFrom;
-    }
-
-    public void Deactivate(DateTimeOffset at)
-    {
-        IsActive = false;
-        EffectiveTo ??= at;
-    }
-
-    public void Reactivate(string displayPlate, DateTimeOffset at)
-    {
-        PlateNumberDisplay = displayPlate.Trim();
-        IsActive = true;
-        EffectiveFrom = EffectiveFrom > at ? EffectiveFrom : at;
-        EffectiveTo = null;
-    }
-
-    public bool MatchesAt(DateTimeOffset at)
-        => IsActive && EffectiveFrom <= at && (EffectiveTo is null || EffectiveTo > at);
-}
-
 public enum CorporateBenefitAllocationStatus
 {
     Active = 1,
@@ -176,7 +135,6 @@ public sealed class CorporateBenefitAllocation : Entity, ITenantOwned
     public Guid CorporateBenefitProgramVersionId { get; private set; }
     public Guid ParkingLocationId { get; private set; }
     public Guid ParkingSessionId { get; private set; }
-    public string PlateNumberNormalized { get; private set; } = string.Empty;
     public DateTimeOffset AllocatedAt { get; private set; }
     public DateTimeOffset? ReleasedAt { get; private set; }
     public CorporateBenefitAllocationStatus Status { get; private set; } = CorporateBenefitAllocationStatus.Active;
@@ -185,14 +143,13 @@ public sealed class CorporateBenefitAllocation : Entity, ITenantOwned
 
     public CorporateBenefitAllocation(
         Guid tenantId, Guid programId, Guid versionId, Guid parkingLocationId, Guid parkingSessionId,
-        string plateNumberNormalized, DateTimeOffset allocatedAt)
+        DateTimeOffset allocatedAt)
     {
         TenantId = tenantId;
         CorporateBenefitProgramId = programId;
         CorporateBenefitProgramVersionId = versionId;
         ParkingLocationId = parkingLocationId;
         ParkingSessionId = parkingSessionId;
-        PlateNumberNormalized = plateNumberNormalized;
         AllocatedAt = allocatedAt;
     }
 

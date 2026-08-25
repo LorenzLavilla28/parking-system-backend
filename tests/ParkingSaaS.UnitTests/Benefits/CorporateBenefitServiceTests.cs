@@ -13,6 +13,26 @@ namespace ParkingSaaS.UnitTests.Benefits;
 public sealed class CorporateBenefitServiceTests
 {
     [Fact]
+    public void Benefit_request_has_no_plate_number_requirement()
+    {
+        var request = new CreateCorporateBenefitRequest(
+            "ABC Corporation",
+            "",
+            0,
+            Array.Empty<CorporateBenefitLocationRequest>(),
+            new CorporateBenefitRulesRequest(
+                Array.Empty<CorporateBenefitWindowRequest>(),
+                Array.Empty<string>(),
+                Array.Empty<string>(),
+                false,
+                Array.Empty<string>()));
+
+        var result = new CreateCorporateBenefitRequestValidator().Validate(request);
+
+        result.Errors.Should().NotContain(error => error.PropertyName.Contains("Plate", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task Adding_a_revision_at_the_same_start_time_is_rejected()
     {
         var tenantId = Guid.NewGuid();
@@ -25,7 +45,7 @@ public sealed class CorporateBenefitServiceTests
         db.ParkingLocations.Add(location);
         await db.SaveChangesAsync();
 
-        var service = new CorporateBenefitService(db, user, clock, new PlateNormalizer(), new AuditLogger(db, user, clock));
+        var service = new CorporateBenefitService(db, user, clock, new AuditLogger(db, user, clock));
         var request = Request(location.Id);
         var program = await service.CreateAsync(request, CancellationToken.None);
         var effectiveFrom = clock.UtcNow.AddDays(1);
@@ -35,7 +55,6 @@ public sealed class CorporateBenefitServiceTests
             request.Priority,
             request.Locations,
             request.Rules,
-            request.PlateNumbers,
             effectiveFrom,
             request.EffectiveTo);
 
@@ -57,6 +76,5 @@ public sealed class CorporateBenefitServiceTests
                 new[] { "Monday", "Tuesday", "Wednesday", "Thursday", "Friday" },
                 Array.Empty<string>(),
                 false,
-                Array.Empty<string>()),
-            new[] { "ABC123" });
+                Array.Empty<string>()));
 }

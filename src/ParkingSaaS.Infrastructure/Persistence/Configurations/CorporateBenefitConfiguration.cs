@@ -58,23 +58,6 @@ public sealed class CorporateBenefitProgramVersionConfiguration : IEntityTypeCon
     }
 }
 
-public sealed class CorporateBenefitPlateConfiguration : IEntityTypeConfiguration<CorporateBenefitPlate>
-{
-    public void Configure(EntityTypeBuilder<CorporateBenefitPlate> b)
-    {
-        b.ToTable("corporate_benefit_plates");
-        b.HasKey(p => p.Id);
-        b.Property(p => p.TenantId).IsRequired();
-        b.Property(p => p.CorporateBenefitProgramId).IsRequired();
-        b.Property(p => p.PlateNumberNormalized).HasMaxLength(32).IsRequired();
-        b.Property(p => p.PlateNumberDisplay).HasMaxLength(32).IsRequired();
-        b.Property(p => p.IsActive).IsRequired();
-        b.HasIndex(p => new { p.TenantId, p.CorporateBenefitProgramId, p.PlateNumberNormalized }).IsUnique();
-        b.HasIndex(p => new { p.TenantId, p.PlateNumberNormalized, p.IsActive });
-        b.HasOne<CorporateBenefitProgram>().WithMany().HasForeignKey(p => p.CorporateBenefitProgramId).OnDelete(DeleteBehavior.Cascade);
-    }
-}
-
 public sealed class CorporateBenefitAllocationConfiguration : IEntityTypeConfiguration<CorporateBenefitAllocation>
 {
     public void Configure(EntityTypeBuilder<CorporateBenefitAllocation> b)
@@ -86,7 +69,6 @@ public sealed class CorporateBenefitAllocationConfiguration : IEntityTypeConfigu
         b.Property(a => a.CorporateBenefitProgramVersionId).IsRequired();
         b.Property(a => a.ParkingLocationId).IsRequired();
         b.Property(a => a.ParkingSessionId).IsRequired();
-        b.Property(a => a.PlateNumberNormalized).HasMaxLength(32).IsRequired();
         b.Property(a => a.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
 
         b.HasIndex(a => new { a.TenantId, a.ParkingSessionId }).IsUnique();

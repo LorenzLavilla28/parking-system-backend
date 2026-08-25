@@ -12,13 +12,15 @@ public interface ICorporateBenefitService
     Task SetStatusAsync(Guid id, string status, CancellationToken ct);
     Task<IReadOnlyList<CorporateBenefitAllocationResponse>> ListAllocationsAsync(Guid id, CancellationToken ct);
     Task<CorporateBenefitAvailabilityResponse> GetAvailabilityAsync(Guid id, Guid locationId, CancellationToken ct);
+    Task<IReadOnlyList<GuardCorporateBenefitOptionResponse>> ListGuardOptionsAsync(Guid locationId, string vehicleType, CancellationToken ct);
 }
 
 public interface ICorporateBenefitAllocationService
 {
     Task<BenefitAllocationDecision> TryAllocateAsync(
         Guid tenantId, Guid parkingLocationId, Guid parkingSessionId,
-        string normalizedPlate, VehicleType vehicleType, DateTimeOffset at, CancellationToken ct);
+        VehicleType vehicleType, DateTimeOffset at, CancellationToken ct,
+        Guid? selectedProgramId = null);
 
     Task ReleaseForSessionAsync(Guid sessionId, DateTimeOffset at, CancellationToken ct);
 }

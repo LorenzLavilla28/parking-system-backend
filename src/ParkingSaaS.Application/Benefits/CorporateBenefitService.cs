@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using ParkingSaaS.Application.Abstractions;
 using ParkingSaaS.Application.Audit;
 using ParkingSaaS.Application.Common.Exceptions;
+using ParkingSaaS.Application.Guard;
 using ParkingSaaS.Contracts.Benefits;
 using ParkingSaaS.Domain.Benefits;
 using ParkingSaaS.Domain.Locations;
@@ -15,15 +16,13 @@ public sealed class CorporateBenefitService : ICorporateBenefitService
     private readonly IApplicationDbContext _db;
     private readonly ICurrentUser _user;
     private readonly IDateTime _clock;
-    private readonly IPlateNormalizer _plateNormalizer;
     private readonly IAuditLogger _audit;
 
-    public CorporateBenefitService(IApplicationDbContext db, ICurrentUser user, IDateTime clock, IPlateNormalizer plateNormalizer, IAuditLogger audit)
+    public CorporateBenefitService(IApplicationDbContext db, ICurrentUser user, IDateTime clock, IAuditLogger audit)
     {
         _db = db;
         _user = user;
         _clock = clock;
-        _plateNormalizer = plateNormalizer;
         _audit = audit;
     }
 
@@ -45,7 +44,6 @@ public sealed class CorporateBenefitService : ICorporateBenefitService
     {
         var rulesJson = ValidateRules(request.Rules);
         var locations = await ValidateLocationsAsync(request.Locations, ct);
-        var plates = NormalizePlates(request.PlateNumbers);
         var now = _clock.UtcNow;
         var effectiveFrom = ValidateEffectiveWindow(request.EffectiveFrom, request.EffectiveTo, now);
 
@@ -60,15 +58,11 @@ public sealed class CorporateBenefitService : ICorporateBenefitService
                     request.Locations.Single(x => x.ParkingLocationId == location.Id).MaxConcurrentFreeSessions), ct);
         }
 
-        foreach (var plate in plates)
-            await _db.CorporateBenefitPlates.AddAsync(
-                new CorporateBenefitPlate(_user.TenantId, program.Id, plate.Normalized, plate.Display, now), ct);
-
         await _db.CorporateBenefitProgramVersions.AddAsync(
             new CorporateBenefitProgramVersion(_user.TenantId, program.Id, 1, effectiveFrom, rulesJson, _user.UserId ?? Guid.Empty, request.EffectiveTo), ct);
         await _audit.AddAsync(_user.TenantId, locations.First().Id, "CorporateBenefitCreated",
             nameof(CorporateBenefitProgram), program.Id.ToString(), null,
-            new { program.Name, program.Priority, Locations = locations.Select(x => x.Id), PlateCount = plates.Count }, null,
+            new { program.Name, program.Priority, Locations = locations.Select(x => x.Id) }, null,
             new AuditContext(null, null), ct);
         await _db.SaveChangesAsync(ct);
         return await GetAsync(program.Id, ct);
@@ -85,23 +79,17 @@ public sealed class CorporateBenefitService : ICorporateBenefitService
 
         var rulesJson = ValidateRules(request.Rules);
         var locations = await ValidateLocationsAsync(request.Locations, ct);
-        var plates = NormalizePlates(request.PlateNumbers);
         var now = _clock.UtcNow;
         var effectiveFrom = ValidateEffectiveWindow(request.EffectiveFrom, request.EffectiveTo, now);
 
         var existingLocations = await _db.CorporateBenefitProgramLocations
             .Where(x => x.CorporateBenefitProgramId == id).ToListAsync(ct);
-        var existingPlates = await _db.CorporateBenefitPlates
-            .Where(x => x.CorporateBenefitProgramId == id).ToListAsync(ct);
         if (effectiveFrom > now.AddMinutes(1))
         {
             var requestedLocations = request.Locations.ToDictionary(x => x.ParkingLocationId, x => x.MaxConcurrentFreeSessions);
             var currentLocations = existingLocations.ToDictionary(x => x.ParkingLocationId, x => x.MaxConcurrentFreeSessions);
-            var currentPlates = existingPlates.Where(x => x.IsActive).Select(x => x.PlateNumberNormalized).ToHashSet(StringComparer.Ordinal);
-            var requestedPlates = plates.Select(x => x.Normalized).ToHashSet(StringComparer.Ordinal);
-            if (!currentLocations.OrderBy(x => x.Key).SequenceEqual(requestedLocations.OrderBy(x => x.Key)) ||
-                !currentPlates.SetEquals(requestedPlates))
-                throw new ConflictException("A future revision can change pricing rules only. Apply plate and location changes immediately or schedule them in a separate operational change.");
+            if (!currentLocations.OrderBy(x => x.Key).SequenceEqual(requestedLocations.OrderBy(x => x.Key)))
+                throw new ConflictException("A future revision can change pricing rules only. Apply location changes immediately or schedule them in a separate operational change.");
         }
         // Serialize configuration changes with vehicle entry at every affected
         // location so a capacity reduction cannot race a new allocation.
@@ -137,21 +125,6 @@ public sealed class CorporateBenefitService : ICorporateBenefitService
             await _db.CorporateBenefitProgramLocations.AddAsync(
                 new CorporateBenefitProgramLocation(_user.TenantId, id, location.Id,
                     request.Locations.Single(x => x.ParkingLocationId == location.Id).MaxConcurrentFreeSessions), ct);
-
-        foreach (var existing in existingPlates)
-        {
-            var requested = plates.FirstOrDefault(x => x.Normalized == existing.PlateNumberNormalized);
-            if (requested != default)
-            {
-                if (!existing.IsActive) existing.Reactivate(requested.Display, now);
-                continue;
-            }
-            existing.Deactivate(now);
-        }
-
-        foreach (var plate in plates.Where(p => existingPlates.All(x => x.PlateNumberNormalized != p.Normalized)))
-            await _db.CorporateBenefitPlates.AddAsync(
-                new CorporateBenefitPlate(_user.TenantId, id, plate.Normalized, plate.Display, now), ct);
 
         program.Rename(request.Name);
         program.Describe(request.Description ?? string.Empty);
@@ -212,7 +185,7 @@ public sealed class CorporateBenefitService : ICorporateBenefitService
             .Take(500)
             .Select(a => new CorporateBenefitAllocationResponse(
                 a.Id, a.CorporateBenefitProgramId, a.ParkingLocationId, a.ParkingSessionId,
-                a.PlateNumberNormalized, a.AllocatedAt, a.ReleasedAt, a.Status.ToString()))
+                a.AllocatedAt, a.ReleasedAt, a.Status.ToString()))
             .ToListAsync(ct);
     }
 
@@ -226,6 +199,46 @@ public sealed class CorporateBenefitService : ICorporateBenefitService
             a.Status == CorporateBenefitAllocationStatus.Active, ct);
         return new CorporateBenefitAvailabilityResponse(id, locationId, assignment.MaxConcurrentFreeSessions,
             active, Math.Max(0, assignment.MaxConcurrentFreeSessions - active));
+    }
+
+    public async Task<IReadOnlyList<GuardCorporateBenefitOptionResponse>> ListGuardOptionsAsync(
+        Guid locationId, string vehicleType, CancellationToken ct)
+    {
+        await GuardLocationAccess.EnsureCanOperateAsync(_db, _user, locationId, ct);
+        if (!Enum.TryParse<VehicleType>(vehicleType, true, out var parsedVehicleType))
+            throw new ConflictException($"Unknown vehicle type '{vehicleType}'.");
+
+        var now = _clock.UtcNow;
+        var programs = await _db.CorporateBenefitPrograms.AsNoTracking()
+            .Where(p => p.Status == CorporateBenefitProgramStatus.Active)
+            .OrderByDescending(p => p.Priority).ThenBy(p => p.CreatedAt)
+            .ToListAsync(ct);
+        var assignments = await _db.CorporateBenefitProgramLocations.AsNoTracking()
+            .Where(a => a.ParkingLocationId == locationId)
+            .ToDictionaryAsync(a => a.CorporateBenefitProgramId, ct);
+        var versions = await _db.CorporateBenefitProgramVersions.AsNoTracking()
+            .Where(v => v.EffectiveFrom <= now && (v.EffectiveTo == null || v.EffectiveTo > now))
+            .ToListAsync(ct);
+        var counts = await _db.CorporateBenefitAllocations.AsNoTracking()
+            .Where(a => a.ParkingLocationId == locationId && a.Status == CorporateBenefitAllocationStatus.Active)
+            .GroupBy(a => a.CorporateBenefitProgramId)
+            .Select(g => new { ProgramId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.ProgramId, x => x.Count, ct);
+
+        return programs.Select(program =>
+        {
+            assignments.TryGetValue(program.Id, out var assignment);
+            var version = versions.Where(v => v.CorporateBenefitProgramId == program.Id)
+                .OrderByDescending(v => v.VersionNumber).FirstOrDefault();
+            if (assignment is null || version is null) return null;
+            var rules = CorporateBenefitRules.Parse(version.RulesJson);
+            if (!rules.IsVehicleEligible(parsedVehicleType)) return null;
+            var active = counts.GetValueOrDefault(program.Id);
+            return new GuardCorporateBenefitOptionResponse(
+                program.Id, program.Name, program.Priority, assignment.MaxConcurrentFreeSessions,
+                active, Math.Max(0, assignment.MaxConcurrentFreeSessions - active),
+                active >= assignment.MaxConcurrentFreeSessions);
+        }).Where(option => option is not null).Cast<GuardCorporateBenefitOptionResponse>().ToArray();
     }
 
     private async Task<IReadOnlyList<ParkingLocation>> ValidateLocationsAsync(
@@ -243,24 +256,6 @@ public sealed class CorporateBenefitService : ICorporateBenefitService
         if (locations.Count != ids.Length)
             throw new ConflictException("All assigned parking locations must be active and belong to this tenant.");
         return locations;
-    }
-
-    private List<(string Normalized, string Display)> NormalizePlates(IReadOnlyList<string> values)
-    {
-        if (values is null || values.Count == 0)
-            throw new ConflictException("At least one eligible plate number is required.");
-        var result = new List<(string Normalized, string Display)>();
-        foreach (var value in values)
-        {
-            var normalized = _plateNormalizer.Normalize(value);
-            if (string.IsNullOrWhiteSpace(normalized))
-                throw new ConflictException("Plate numbers cannot be empty after normalization.");
-            if (result.Any(x => x.Normalized == normalized)) continue;
-            result.Add((normalized, value.Trim()));
-        }
-        if (result.Count > 10000)
-            throw new ConflictException("A benefit program cannot contain more than 10,000 plates.");
-        return result;
     }
 
     private static string ValidateRules(CorporateBenefitRulesRequest request)
@@ -290,7 +285,6 @@ public sealed class CorporateBenefitService : ICorporateBenefitService
         var versions = await _db.CorporateBenefitProgramVersions.AsNoTracking()
             .Where(x => ids.Contains(x.CorporateBenefitProgramId) && x.EffectiveFrom <= now &&
                         (x.EffectiveTo == null || x.EffectiveTo > now)).ToListAsync(ct);
-        var plates = await _db.CorporateBenefitPlates.AsNoTracking().Where(x => ids.Contains(x.CorporateBenefitProgramId)).OrderBy(x => x.PlateNumberNormalized).ToListAsync(ct);
         var allocationCounts = await _db.CorporateBenefitAllocations.AsNoTracking().Where(x => ids.Contains(x.CorporateBenefitProgramId) && x.Status == CorporateBenefitAllocationStatus.Active).GroupBy(x => new { x.CorporateBenefitProgramId, x.ParkingLocationId }).Select(g => new { g.Key.CorporateBenefitProgramId, g.Key.ParkingLocationId, Count = g.Count() }).ToListAsync(ct);
 
         return programs.Select(program =>
@@ -305,7 +299,6 @@ public sealed class CorporateBenefitService : ICorporateBenefitService
             return new CorporateBenefitProgramResponse(
                 program.Id, program.Name, program.Description, program.Priority, program.Status.ToString(),
                 version?.VersionNumber ?? 0, programAssignments, ToRequest(rules),
-                plates.Where(x => x.CorporateBenefitProgramId == program.Id).Select(x => new CorporateBenefitPlateResponse(x.Id, x.PlateNumberDisplay, x.IsActive, x.EffectiveFrom, x.EffectiveTo)).ToArray(),
                 program.CreatedAt, program.UpdatedAt, version?.EffectiveFrom, version?.EffectiveTo);
         }).ToArray();
     }
@@ -332,41 +325,43 @@ public sealed class CorporateBenefitAllocationService : ICorporateBenefitAllocat
     public CorporateBenefitAllocationService(IApplicationDbContext db) => _db = db;
 
     public async Task<BenefitAllocationDecision> TryAllocateAsync(
-        Guid tenantId, Guid parkingLocationId, Guid parkingSessionId, string normalizedPlate,
-        VehicleType vehicleType, DateTimeOffset at, CancellationToken ct)
+        Guid tenantId, Guid parkingLocationId, Guid parkingSessionId,
+        VehicleType vehicleType, DateTimeOffset at, CancellationToken ct, Guid? selectedProgramId = null)
     {
-        var location = await _db.ParkingLocations.AsNoTracking().FirstAsync(x => x.Id == parkingLocationId, ct);
-        var candidatePlates = await _db.CorporateBenefitPlates
-            .Where(x => x.PlateNumberNormalized == normalizedPlate && x.IsActive && x.EffectiveFrom <= at &&
-                        (x.EffectiveTo == null || x.EffectiveTo > at))
-            .ToListAsync(ct);
-        if (candidatePlates.Count == 0)
+        if (selectedProgramId is null)
             return new BenefitAllocationDecision(false, null, null, null);
 
         var candidates = await _db.CorporateBenefitPrograms
-            .Where(x => x.Status == CorporateBenefitProgramStatus.Active && candidatePlates.Select(p => p.CorporateBenefitProgramId).Contains(x.Id))
+            .Where(x => x.Status == CorporateBenefitProgramStatus.Active && x.Id == selectedProgramId.Value)
             .OrderByDescending(x => x.Priority).ThenBy(x => x.CreatedAt).ToListAsync(ct);
+        if (selectedProgramId is not null && candidates.Count == 0)
+            throw new ConflictException("The selected corporate benefit is not active or does not belong to this tenant.");
         string? unavailableProgram = null;
 
         foreach (var program in candidates)
         {
             var assignment = await _db.CorporateBenefitProgramLocations.FirstOrDefaultAsync(x =>
                 x.CorporateBenefitProgramId == program.Id && x.ParkingLocationId == parkingLocationId, ct);
-            if (assignment is null) continue;
+            if (assignment is null)
+            {
+                if (selectedProgramId is not null)
+                    throw new ConflictException("The selected corporate benefit is not configured for this location.");
+                continue;
+            }
 
             var version = await _db.CorporateBenefitProgramVersions
                 .Where(x => x.CorporateBenefitProgramId == program.Id && x.EffectiveFrom <= at &&
                             (x.EffectiveTo == null || x.EffectiveTo > at))
                 .OrderByDescending(x => x.VersionNumber).FirstOrDefaultAsync(ct);
-            if (version is null) continue;
+            if (version is null)
+            {
+                if (selectedProgramId is not null)
+                    throw new ConflictException("The selected corporate benefit has no active revision.");
+                continue;
+            }
 
             var rules = CorporateBenefitRules.Parse(version.RulesJson);
             if (!rules.IsVehicleEligible(vehicleType)) continue;
-            // Reserve the shared entitlement when the session overlaps a
-            // configured window in the next scheduling cycle. This covers a
-            // late-week entry before the next configured weekday without
-            // reserving arbitrary plates forever.
-            if (rules.GetFreeIntervals(at, at.AddDays(7), location.Timezone).Count == 0) continue;
 
             var activeCount = await _db.CorporateBenefitAllocations.CountAsync(x =>
                 x.CorporateBenefitProgramId == program.Id && x.ParkingLocationId == parkingLocationId &&
@@ -378,14 +373,14 @@ public sealed class CorporateBenefitAllocationService : ICorporateBenefitAllocat
             }
 
             var allocation = new CorporateBenefitAllocation(
-                tenantId, program.Id, version.Id, parkingLocationId, parkingSessionId, normalizedPlate, at);
+                tenantId, program.Id, version.Id, parkingLocationId, parkingSessionId, at);
             await _db.CorporateBenefitAllocations.AddAsync(allocation, ct);
-            return new BenefitAllocationDecision(true, program.Name, "Corporate benefit allocated.", allocation.Id);
+            return new BenefitAllocationDecision(true, program.Name, "Corporate benefit applied.", allocation.Id);
         }
 
         return unavailableProgram is null
             ? new BenefitAllocationDecision(false, null, null, null)
-            : new BenefitAllocationDecision(false, unavailableProgram, "Eligible plate, but the shared benefit capacity is occupied.", null);
+            : new BenefitAllocationDecision(false, unavailableProgram, "All complimentary spaces are currently in use. The standard rate applies.", null);
     }
 
     public async Task ReleaseForSessionAsync(Guid sessionId, DateTimeOffset at, CancellationToken ct)

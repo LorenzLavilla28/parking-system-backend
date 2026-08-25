@@ -11,7 +11,6 @@ public sealed class CreateCorporateBenefitRequestValidator : AbstractValidator<C
         RuleFor(x => x.Description).MaximumLength(500);
         RuleFor(x => x.Priority).InclusiveBetween(0, 10000);
         RuleFor(x => x.Locations).NotEmpty();
-        RuleFor(x => x.PlateNumbers).NotEmpty();
         RuleForEach(x => x.Locations).SetValidator(new CorporateBenefitLocationRequestValidator());
     }
 }
@@ -24,7 +23,6 @@ public sealed class UpdateCorporateBenefitRequestValidator : AbstractValidator<U
         RuleFor(x => x.Description).MaximumLength(500);
         RuleFor(x => x.Priority).InclusiveBetween(0, 10000);
         RuleFor(x => x.Locations).NotEmpty();
-        RuleFor(x => x.PlateNumbers).NotEmpty();
         RuleForEach(x => x.Locations).SetValidator(new CorporateBenefitLocationRequestValidator());
     }
 }

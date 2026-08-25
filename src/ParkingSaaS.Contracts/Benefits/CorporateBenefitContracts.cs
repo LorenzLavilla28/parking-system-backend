@@ -18,7 +18,6 @@ public sealed record CreateCorporateBenefitRequest(
     int Priority,
     IReadOnlyList<CorporateBenefitLocationRequest> Locations,
     CorporateBenefitRulesRequest Rules,
-    IReadOnlyList<string> PlateNumbers,
     DateTimeOffset? EffectiveFrom = null,
     DateTimeOffset? EffectiveTo = null);
 
@@ -28,7 +27,6 @@ public sealed record UpdateCorporateBenefitRequest(
     int Priority,
     IReadOnlyList<CorporateBenefitLocationRequest> Locations,
     CorporateBenefitRulesRequest Rules,
-    IReadOnlyList<string> PlateNumbers,
     DateTimeOffset? EffectiveFrom = null,
     DateTimeOffset? EffectiveTo = null);
 
@@ -41,7 +39,6 @@ public sealed record CorporateBenefitProgramResponse(
     int CurrentVersionNumber,
     IReadOnlyList<CorporateBenefitLocationResponse> Locations,
     CorporateBenefitRulesRequest Rules,
-    IReadOnlyList<CorporateBenefitPlateResponse> Plates,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     DateTimeOffset? CurrentEffectiveFrom = null,
@@ -53,19 +50,11 @@ public sealed record CorporateBenefitLocationResponse(
     int MaxConcurrentFreeSessions,
     int ActiveAllocations);
 
-public sealed record CorporateBenefitPlateResponse(
-    Guid Id,
-    string PlateNumber,
-    bool IsActive,
-    DateTimeOffset EffectiveFrom,
-    DateTimeOffset? EffectiveTo);
-
 public sealed record CorporateBenefitAllocationResponse(
     Guid Id,
     Guid CorporateBenefitProgramId,
     Guid ParkingLocationId,
     Guid ParkingSessionId,
-    string PlateNumber,
     DateTimeOffset AllocatedAt,
     DateTimeOffset? ReleasedAt,
     string Status);
@@ -76,6 +65,15 @@ public sealed record CorporateBenefitAvailabilityResponse(
     int Capacity,
     int ActiveAllocations,
     int AvailableSlots);
+
+public sealed record GuardCorporateBenefitOptionResponse(
+    Guid ProgramId,
+    string ProgramName,
+    int Priority,
+    int Capacity,
+    int ActiveAllocations,
+    int AvailableSlots,
+    bool IsFull);
 
 public sealed record SetCorporateBenefitStatusRequest(string Status);
 
