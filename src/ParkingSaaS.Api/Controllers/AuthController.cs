@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -8,7 +9,6 @@ using ParkingSaaS.Contracts.Common;
 
 namespace ParkingSaaS.Api.Controllers;
 
-[AllowAnonymous]
 [EnableRateLimiting("auth")]
 [Route("api/auth")]
 public sealed class AuthController : ApiControllerBase
@@ -23,6 +23,7 @@ public sealed class AuthController : ApiControllerBase
     }
 
     [HttpPost("login")]
+    [AllowAnonymous]
     [ProducesResponseType(typeof(ApiResponse<AuthResponse>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct)
     {
@@ -31,6 +32,7 @@ public sealed class AuthController : ApiControllerBase
     }
 
     [HttpPost("refresh")]
+    [AllowAnonymous]
     [ProducesResponseType(typeof(ApiResponse<AuthResponse>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Refresh([FromBody] RefreshRequest request, CancellationToken ct)
     {
@@ -38,7 +40,20 @@ public sealed class AuthController : ApiControllerBase
         return Ok(ApiResponse<AuthResponse>.Ok(result));
     }
 
+    [Authorize]
+    [HttpPost("switch-context")]
+    [ProducesResponseType(typeof(ApiResponse<AuthResponse>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SwitchContext([FromBody] SwitchContextRequest request, CancellationToken ct)
+    {
+        if (!Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))
+            return Unauthorized();
+
+        var result = await _auth.SwitchContextAsync(request, userId, ClientIp, ct);
+        return Ok(ApiResponse<AuthResponse>.Ok(result));
+    }
+
     [HttpPost("logout")]
+    [AllowAnonymous]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Logout([FromBody] LogoutRequest request, CancellationToken ct)
     {
@@ -47,6 +62,7 @@ public sealed class AuthController : ApiControllerBase
     }
 
     [HttpPost("forgot-password")]
+    [AllowAnonymous]
     [ProducesResponseType(typeof(ApiResponse<PasswordResetResponse>), StatusCodes.Status200OK)]
     public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request, CancellationToken ct)
     {
@@ -55,6 +71,7 @@ public sealed class AuthController : ApiControllerBase
     }
 
     [HttpPost("reset-password")]
+    [AllowAnonymous]
     [ProducesResponseType(typeof(ApiResponse<PasswordResetResponse>), StatusCodes.Status200OK)]
     public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request, CancellationToken ct)
     {

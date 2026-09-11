@@ -18,3 +18,9 @@ public enum UserStatus
     Disabled = 2,
     Locked = 3
 }
+
+public enum MembershipStatus
+{
+    Active = 1,
+    Disabled = 2
+}

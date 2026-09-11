@@ -9,6 +9,7 @@ using ParkingSaaS.Application.Pricing;
 using ParkingSaaS.Contracts.Guard;
 using ParkingSaaS.Contracts.Realtime;
 using ParkingSaaS.Domain.Locations;
+using ParkingSaaS.Domain.Pricing;
 using ParkingSaaS.Domain.Sessions;
 using ParkingSaaS.Domain.Services;
 
@@ -75,6 +76,8 @@ public sealed class GuardEntryService : IGuardEntryService
         ParkingSession session = null!;
         string publicToken = string.Empty;
         string ticketCode = string.Empty;
+        var rateCurrency = "PHP";
+        IReadOnlyList<EntryRateLine> rateBreakdown = Array.Empty<EntryRateLine>();
         BenefitAllocationDecision? benefitDecision = null;
 
         await _db.ExecuteInTransactionAsync(async txct =>
@@ -123,6 +126,20 @@ public sealed class GuardEntryService : IGuardEntryService
             var versionId = await _ratePlanResolver.ResolveActiveVersionIdAsync(location.Id, session.EntryTime, txct);
             if (versionId is not { } v)
                 throw new ConflictException("rate_plan_required: the location must have an active rate plan version before accepting entries.");
+
+            var ratePlanVersion = await _db.RatePlanVersions
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .FirstOrDefaultAsync(version => version.Id == v && version.TenantId == location.TenantId, txct);
+            if (ratePlanVersion is null)
+                throw new ConflictException("rate_plan_required: the active rate plan version could not be loaded.");
+
+            var rules = PricingRules.Parse(ratePlanVersion.RulesJson);
+            rateCurrency = rules.Currency;
+            rateBreakdown = RatePlanDisplayBuilder
+                .Build(rules, session.VehicleType, session.EntryTime, location.Timezone)
+                .Select(line => new EntryRateLine(line.Code, line.Description, line.Amount))
+                .ToArray();
             session.SetRatePlanVersion(v);
 
             if (_benefits is not null)
@@ -173,7 +190,9 @@ public sealed class GuardEntryService : IGuardEntryService
             location.Name,
             benefitDecision?.Applied ?? false,
             benefitDecision?.ProgramName,
-            benefitDecision?.Message);
+            benefitDecision?.Message,
+            rateCurrency,
+            rateBreakdown);
     }
 
     private static bool IsUniqueViolation(DbUpdateException ex)

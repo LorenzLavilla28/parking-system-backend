@@ -12,9 +12,9 @@ using ParkingSaaS.Domain.Users;
 namespace ParkingSaaS.Application.Auth;
 
 /// <summary>
-/// Handles credential verification, JWT issuance, and rotating refresh tokens.
-/// Refresh tokens are single-use: presenting one revokes it and mints a new one,
-/// so a stolen-then-reused token is detectable and the chain can be cut.
+/// Handles credential verification, scoped membership selection, JWT issuance,
+/// and rotating refresh tokens. An account has one credential set, while each
+/// token is bound to exactly one active tenant or platform membership.
 /// </summary>
 public sealed class AuthService : IAuthService
 {
@@ -56,32 +56,18 @@ public sealed class AuthService : IAuthService
     public async Task<AuthResponse> LoginAsync(LoginRequest request, string? ipAddress, CancellationToken ct)
     {
         var email = request.Email.Trim().ToLowerInvariant();
-
-        // IgnoreQueryFilters: login happens before any tenant context exists, and
-        // email is globally unique, so we resolve the user across all tenants here.
-        var user = await _db.Users
-            .IgnoreQueryFilters()
-            .Include(u => u.Roles)
-            .Include(u => u.LocationAssignments)
-            .FirstOrDefaultAsync(u => u.Email == email, ct);
-
+        var user = await LoadUserAsync(email, ct);
         var now = _clock.UtcNow;
 
         if (user is null)
         {
-            // Verify against a throwaway hash to keep timing roughly constant and
-            // avoid revealing whether the email exists.
             _passwordHasher.Verify(DummyHash, request.Password, out _);
             _logger.LogWarning("Failed login for unknown email {Email} from {Ip}", email, ipAddress);
             throw new UnauthorizedAppException();
         }
 
         if (user.IsLockedOut(now))
-        {
-            _logger.LogWarning("Login attempt on locked account {UserId}", user.Id);
             throw new UnauthorizedAppException("Account is temporarily locked. Try again later.");
-        }
-
         if (!user.CanAuthenticate)
             throw new UnauthorizedAppException("Account is not active.");
 
@@ -93,16 +79,14 @@ public sealed class AuthService : IAuthService
             throw new UnauthorizedAppException();
         }
 
-        await EnsureTenantIsActiveAsync(user.TenantId, ct);
-
+        var membership = await ResolveMembershipAsync(user, request.TenantId, ct);
         if (needsRehash)
             user.SetPasswordHash(_passwordHasher.Hash(request.Password));
-
         user.RegisterSuccessfulLogin();
 
-        var response = await IssueTokensAsync(user, ipAddress, now, ct);
+        var response = await IssueTokensAsync(user, membership.TenantId, ipAddress, now, ct);
         await _db.SaveChangesAsync(ct);
-        _logger.LogInformation("User {UserId} signed in", user.Id);
+        _logger.LogInformation("User {UserId} signed in using tenant context {TenantId}", user.Id, membership.TenantId);
         return response;
     }
 
@@ -110,7 +94,6 @@ public sealed class AuthService : IAuthService
     {
         var hash = _refreshTokens.Hash(request.RefreshToken);
         var now = _clock.UtcNow;
-
         var token = await _db.RefreshTokens
             .IgnoreQueryFilters()
             .FirstOrDefaultAsync(t => t.TokenHash == hash, ct);
@@ -118,20 +101,27 @@ public sealed class AuthService : IAuthService
         if (token is null || !token.IsActive(now))
             throw new UnauthorizedAppException("Invalid or expired refresh token.");
 
-        var user = await _db.Users
-            .IgnoreQueryFilters()
-            .Include(u => u.Roles)
-            .Include(u => u.LocationAssignments)
-            .FirstOrDefaultAsync(u => u.Id == token.UserId, ct);
-
+        var user = await LoadUserAsync(token.UserId, ct);
         if (user is null || !user.CanAuthenticate)
             throw new UnauthorizedAppException("Account is not active.");
 
-        await EnsureTenantIsActiveAsync(user.TenantId, ct);
-
-        // Rotate: the presented token is consumed and chained to its replacement.
-        var response = await IssueTokensAsync(user, ipAddress, now, ct);
+        var membership = await ResolveMembershipAsync(user, token.TenantId, ct);
+        var response = await IssueTokensAsync(user, membership.TenantId, ipAddress, now, ct);
         token.Revoke(now, _refreshTokens.Hash(response.RefreshToken));
+        await _db.SaveChangesAsync(ct);
+        return response;
+    }
+
+    public async Task<AuthResponse> SwitchContextAsync(
+        SwitchContextRequest request, Guid userId, string? ipAddress, CancellationToken ct)
+    {
+        var user = await LoadUserAsync(userId, ct)
+            ?? throw new UnauthorizedAppException();
+        if (!user.CanAuthenticate)
+            throw new UnauthorizedAppException("Account is not active.");
+
+        var membership = await ResolveMembershipAsync(user, request.TenantId, ct);
+        var response = await IssueTokensAsync(user, membership.TenantId, ipAddress, _clock.UtcNow, ct);
         await _db.SaveChangesAsync(ct);
         return response;
     }
@@ -156,17 +146,22 @@ public sealed class AuthService : IAuthService
         var email = request.Email.Trim().ToLowerInvariant();
         var user = await _db.Users
             .IgnoreQueryFilters()
+            .Include(u => u.Roles)
+            .Include(u => u.Memberships)
             .FirstOrDefaultAsync(u => u.Email == email && u.Status == UserStatus.Active, ct);
 
-        // Always return the same response so the endpoint cannot be used to
-        // enumerate registered accounts.
         if (user is null)
-            return new PasswordResetResponse("If an account exists for that email, a password reset link has been sent.");
+            return GenericPasswordResetResponse();
 
-        // Keep the response deliberately generic, but do not issue a reset link
-        // that could be used to prepare a suspended tenant account for access.
-        if (user.TenantId != Guid.Empty && await GetTenantStatusAsync(user.TenantId, ct) != TenantStatus.Active)
-            return new PasswordResetResponse("If an account exists for that email, a password reset link has been sent.");
+        UserMembership membership;
+        try
+        {
+            membership = await ResolveMembershipAsync(user, null, ct);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAppException or TenantSuspendedException)
+        {
+            return GenericPasswordResetResponse();
+        }
 
         var now = _clock.UtcNow;
         var previous = await _db.PasswordResetTokens
@@ -174,27 +169,25 @@ public sealed class AuthService : IAuthService
             .Where(t => t.UserId == user.Id && t.UsedAt == null)
             .ToListAsync(ct);
 
-        // Avoid becoming an email-spam primitive when the same account is
-        // repeatedly submitted, while keeping the response indistinguishable.
         if (previous.Any(t => t.CreatedAt > now.AddMinutes(-1)))
-            return new PasswordResetResponse("If an account exists for that email, a password reset link has been sent.");
+            return GenericPasswordResetResponse();
 
         foreach (var token in previous) token.Consume(now);
 
         var rawToken = _refreshTokens.GenerateToken();
         var resetToken = new PasswordResetToken(
             user.Id,
-            user.TenantId,
+            membership.TenantId,
             _refreshTokens.Hash(rawToken),
             now,
             now.AddMinutes(_passwordResetOptions.TokenLifetimeMinutes));
         await _db.PasswordResetTokens.AddAsync(resetToken, ct);
 
         var resetUrl = $"{appBaseUrl.TrimEnd('/')}/reset-password?token={Uri.EscapeDataString(rawToken)}";
-        _emailQueue.QueuePasswordReset(user.TenantId, user.Email, user.FullName, resetUrl, now);
+        _emailQueue.QueuePasswordReset(membership.TenantId, user.Email, user.FullName, resetUrl, now);
         await _db.SaveChangesAsync(ct);
 
-        return new PasswordResetResponse("If an account exists for that email, a password reset link has been sent.");
+        return GenericPasswordResetResponse();
     }
 
     public async Task ResetPasswordAsync(ResetPasswordRequest request, CancellationToken ct)
@@ -207,15 +200,11 @@ public sealed class AuthService : IAuthService
         if (token is null || !token.IsActive(now))
             throw new UnauthorizedAppException("This password reset link is invalid or expired.");
 
-        var user = await _db.Users
-            .IgnoreQueryFilters()
-            .Include(u => u.Roles)
-            .FirstOrDefaultAsync(u => u.Id == token.UserId, ct);
+        var user = await LoadUserAsync(token.UserId, ct);
         if (user is null || !user.CanAuthenticate)
             throw new UnauthorizedAppException("This password reset link is invalid or expired.");
 
-        await EnsureTenantIsActiveAsync(user.TenantId, ct);
-
+        _ = await ResolveMembershipAsync(user, null, ct);
         user.CompletePasswordChange(_passwordHasher.Hash(request.NewPassword));
         token.Consume(now);
         await RevokeActiveRefreshTokensAsync(user.Id, now, ct);
@@ -223,58 +212,164 @@ public sealed class AuthService : IAuthService
     }
 
     public async Task<AuthResponse> ChangePasswordAsync(
-        ChangePasswordRequest request, Guid userId, string? ipAddress, CancellationToken ct)
+        ChangePasswordRequest request, Guid userId, Guid activeTenantId, string? ipAddress, CancellationToken ct)
     {
-        var user = await _db.Users
-            .IgnoreQueryFilters()
-            .Include(u => u.Roles)
-            .Include(u => u.LocationAssignments)
-            .FirstOrDefaultAsync(u => u.Id == userId, ct)
+        var user = await LoadUserAsync(userId, ct)
             ?? throw new UnauthorizedAppException();
 
         if (!user.CanAuthenticate || !_passwordHasher.Verify(user.PasswordHash, request.CurrentPassword, out _))
             throw new UnauthorizedAppException("Current password is incorrect.");
 
-        await EnsureTenantIsActiveAsync(user.TenantId, ct);
-
+        var membership = await ResolveMembershipAsync(user, activeTenantId, ct);
         var now = _clock.UtcNow;
         user.CompletePasswordChange(_passwordHasher.Hash(request.NewPassword));
         await RevokeActiveRefreshTokensAsync(user.Id, now, ct);
-        var response = await IssueTokensAsync(user, ipAddress, now, ct);
+        var response = await IssueTokensAsync(user, membership.TenantId, ipAddress, now, ct);
         await _db.SaveChangesAsync(ct);
         return response;
     }
 
-    private async Task<AuthResponse> IssueTokensAsync(ApplicationUser user, string? ipAddress, DateTimeOffset now, CancellationToken ct)
-    {
-        var access = _jwt.CreateAccessToken(user);
-
-        var tenant = await _db.Tenants
+    private async Task<ApplicationUser?> LoadUserAsync(string email, CancellationToken ct)
+        => await _db.Users
             .IgnoreQueryFilters()
-            .Where(t => t.Id == user.TenantId)
-            .Select(t => new { t.Name, t.Status })
-            .SingleOrDefaultAsync(ct);
+            .Include(u => u.Roles)
+            .Include(u => u.Memberships)
+            .Include(u => u.LocationAssignments)
+            .FirstOrDefaultAsync(u => u.Email == email, ct);
 
-        var tenantName = tenant?.Name ?? "Tenant workspace";
+    private async Task<ApplicationUser?> LoadUserAsync(Guid userId, CancellationToken ct)
+        => await _db.Users
+            .IgnoreQueryFilters()
+            .Include(u => u.Roles)
+            .Include(u => u.Memberships)
+            .Include(u => u.LocationAssignments)
+            .FirstOrDefaultAsync(u => u.Id == userId, ct);
+
+    private async Task<UserMembership> ResolveMembershipAsync(
+        ApplicationUser user, Guid? requestedTenantId, CancellationToken ct)
+    {
+        var candidates = user.Memberships
+            .Where(m => m.IsActive && user.Roles.Any(r => r.TenantId == m.TenantId))
+            .ToArray();
+
+        UserMembership? membership;
+        if (requestedTenantId.HasValue)
+        {
+            membership = candidates.FirstOrDefault(m => m.TenantId == requestedTenantId.Value);
+        }
+        else
+        {
+            // Do not let a suspended legacy/default tenant hide another active
+            // membership. Platform remains the preferred context, followed by
+            // the legacy tenant only when it is active, then any other active
+            // tenant membership.
+            var activeTenantIds = await _db.Tenants
+                .IgnoreQueryFilters()
+                .Where(t => t.Status == TenantStatus.Active)
+                .Select(t => t.Id)
+                .ToArrayAsync(ct);
+            var activeCandidates = candidates
+                .Where(m => m.TenantId == Guid.Empty || activeTenantIds.Contains(m.TenantId))
+                .ToArray();
+
+            membership = activeCandidates.FirstOrDefault(m => m.TenantId == Guid.Empty)
+                ?? activeCandidates.FirstOrDefault(m => m.TenantId == user.TenantId)
+                ?? activeCandidates.FirstOrDefault()
+                // Preserve the useful suspended/archived error when no active
+                // context remains, rather than returning a generic 401.
+                ?? candidates.FirstOrDefault();
+        }
+
+        if (membership is null)
+            throw new UnauthorizedAppException("No active workspace is available for this account.");
+
+        await EnsureTenantIsActiveAsync(membership.TenantId, ct);
+        return membership;
+    }
+
+    private async Task<AuthResponse> IssueTokensAsync(
+        ApplicationUser user, Guid activeTenantId, string? ipAddress, DateTimeOffset now, CancellationToken ct)
+    {
+        var membership = await ResolveMembershipAsync(user, activeTenantId, ct);
+        var access = _jwt.CreateAccessToken(user, membership.TenantId);
+
+        var tenant = membership.TenantId == Guid.Empty
+            ? null
+            : await _db.Tenants
+                .IgnoreQueryFilters()
+                .Where(t => t.Id == membership.TenantId)
+                .Select(t => new { t.Name, t.Status })
+                .SingleOrDefaultAsync(ct);
+
+        var tenantName = tenant?.Name ?? "Platform Console";
         var tenantStatus = tenant?.Status.ToString() ?? "Platform";
-
         var refreshValue = _refreshTokens.GenerateToken();
         var refreshExpiry = now.AddDays(_jwtOptions.RefreshTokenDays);
-        var refresh = new RefreshToken(user.Id, user.TenantId, _refreshTokens.Hash(refreshValue), now, refreshExpiry, ipAddress);
-        await _db.RefreshTokens.AddAsync(refresh, ct);
+        await _db.RefreshTokens.AddAsync(
+            new RefreshToken(user.Id, membership.TenantId, _refreshTokens.Hash(refreshValue), now, refreshExpiry, ipAddress), ct);
+
+        var contexts = await BuildContextsAsync(user, ct);
+        var roles = user.Roles
+            .Where(r => r.TenantId == membership.TenantId)
+            .Select(r => RoleNames.ToName(r.Role))
+            .Distinct()
+            .ToArray();
+        var locations = user.LocationAssignments
+            .Where(a => a.TenantId == membership.TenantId)
+            .Select(a => a.ParkingLocationId)
+            .Distinct()
+            .ToArray();
 
         var dto = new AuthUserDto(
             user.Id,
-            user.TenantId,
+            membership.TenantId,
             tenantName,
             user.Email,
             user.FullName,
-            user.Roles.Select(r => RoleNames.ToName(r.Role)).ToArray(),
-            user.LocationAssignments.Select(a => a.ParkingLocationId).ToArray(),
+            roles,
+            locations,
             user.MustChangePassword,
-            tenantStatus);
+            tenantStatus,
+            contexts);
 
         return new AuthResponse(access.Value, access.ExpiresAt, refreshValue, refreshExpiry, dto);
+    }
+
+    private async Task<IReadOnlyCollection<AuthContextDto>> BuildContextsAsync(
+        ApplicationUser user, CancellationToken ct)
+    {
+        var tenantIds = user.Memberships
+            .Where(m => m.TenantId != Guid.Empty)
+            .Select(m => m.TenantId)
+            .Distinct()
+            .ToArray();
+        var tenants = await _db.Tenants
+            .IgnoreQueryFilters()
+            .Where(t => tenantIds.Contains(t.Id))
+            .Select(t => new { t.Id, t.Name, t.Status })
+            .ToDictionaryAsync(t => t.Id, ct);
+
+        return user.Memberships
+            .Where(m => m.IsActive
+                && (m.TenantId == Guid.Empty
+                    || (tenants.TryGetValue(m.TenantId, out var tenant) && tenant.Status == TenantStatus.Active))
+                && user.Roles.Any(r => r.TenantId == m.TenantId))
+            .OrderByDescending(m => m.TenantId == Guid.Empty)
+            .ThenBy(m => m.TenantId)
+            .Select(m =>
+            {
+                var tenant = m.TenantId == Guid.Empty || !tenants.TryGetValue(m.TenantId, out var found)
+                    ? null
+                    : found;
+                return new AuthContextDto(
+                    m.TenantId,
+                    tenant?.Name ?? "Platform Console",
+                    tenant?.Status.ToString() ?? "Platform",
+                    user.Roles.Where(r => r.TenantId == m.TenantId).Select(r => RoleNames.ToName(r.Role)).Distinct().ToArray(),
+                    user.LocationAssignments.Where(a => a.TenantId == m.TenantId).Select(a => a.ParkingLocationId).Distinct().ToArray(),
+                    m.TenantId == Guid.Empty);
+            })
+            .ToArray();
     }
 
     private async Task RevokeActiveRefreshTokensAsync(Guid userId, DateTimeOffset now, CancellationToken ct)
@@ -288,13 +383,9 @@ public sealed class AuthService : IAuthService
 
     private async Task EnsureTenantIsActiveAsync(Guid tenantId, CancellationToken ct)
     {
-        // Platform administrators use Guid.Empty and are intentionally outside
-        // tenant lifecycle enforcement.
-        if (tenantId == Guid.Empty)
-            return;
+        if (tenantId == Guid.Empty) return;
 
         var status = await GetTenantStatusAsync(tenantId, ct);
-
         if (status != TenantStatus.Active)
         {
             var message = status == TenantStatus.Archived
@@ -305,18 +396,17 @@ public sealed class AuthService : IAuthService
     }
 
     private async Task<TenantStatus?> GetTenantStatusAsync(Guid tenantId, CancellationToken ct)
-    {
-        if (tenantId == Guid.Empty)
-            return null;
+        => tenantId == Guid.Empty
+            ? null
+            : await _db.Tenants
+                .IgnoreQueryFilters()
+                .Where(t => t.Id == tenantId)
+                .Select(t => (TenantStatus?)t.Status)
+                .SingleOrDefaultAsync(ct);
 
-        return await _db.Tenants
-            .IgnoreQueryFilters()
-            .Where(t => t.Id == tenantId)
-            .Select(t => (TenantStatus?)t.Status)
-            .SingleOrDefaultAsync(ct);
-    }
+    private static PasswordResetResponse GenericPasswordResetResponse()
+        => new("If an account exists for that email, a password reset link has been sent.");
 
-    // A precomputed valid PBKDF2 hash of a random string, used only for timing parity.
     private const string DummyHash =
         "AQAAAAEAACcQAAAAEDummyDummyDummyDummyDummyDummyDummyDummyDummyDummyDummyDummyDummyDw==";
 }

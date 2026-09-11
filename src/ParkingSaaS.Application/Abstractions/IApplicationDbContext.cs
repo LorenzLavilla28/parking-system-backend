@@ -21,6 +21,7 @@ public interface IApplicationDbContext
 {
     DbSet<Tenant> Tenants { get; }
     DbSet<ApplicationUser> Users { get; }
+    DbSet<UserMembership> UserMemberships { get; }
     DbSet<UserRole> UserRoles { get; }
     DbSet<UserParkingLocation> UserParkingLocations { get; }
     DbSet<RefreshToken> RefreshTokens { get; }
@@ -45,4 +46,5 @@ public interface IApplicationDbContext
     Task LockFeeQuoteAsync(Guid feeQuoteId, CancellationToken cancellationToken = default);
     Task LockLocationAsync(Guid locationId, CancellationToken cancellationToken = default);
     Task LockTenantAsync(Guid tenantId, CancellationToken cancellationToken = default);
+    Task LockUserAsync(Guid userId, CancellationToken cancellationToken = default);
 }

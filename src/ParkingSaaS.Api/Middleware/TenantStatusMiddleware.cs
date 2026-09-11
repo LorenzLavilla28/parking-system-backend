@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using ParkingSaaS.Application.Common;
 using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Domain.Tenants;
+using ParkingSaaS.Domain.Users;
 using ParkingSaaS.Infrastructure.Identity;
 using ParkingSaaS.Infrastructure.Persistence;
 
@@ -32,6 +33,21 @@ public sealed class TenantStatusMiddleware
             && Guid.TryParse(principal.FindFirstValue(AppClaimTypes.TenantId), out var tenantId)
             && tenantId != Guid.Empty)
         {
+            if (Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))
+            {
+                var hasActiveMembership = await db.UserMemberships
+                    .IgnoreQueryFilters()
+                    .AnyAsync(
+                        membership => membership.UserId == userId
+                            && membership.TenantId == tenantId
+                            && membership.Status == MembershipStatus.Active,
+                        context.RequestAborted);
+
+                if (!hasActiveMembership)
+                    throw new UnauthorizedAppException(
+                        "Your access to this tenant is no longer active.");
+            }
+
             var status = await db.Tenants
                 .IgnoreQueryFilters()
                 .AsNoTracking()

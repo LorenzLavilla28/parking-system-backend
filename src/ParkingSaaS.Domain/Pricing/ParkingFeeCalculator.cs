@@ -68,21 +68,18 @@ public sealed class ParkingFeeCalculator : IParkingFeeCalculator
         if (billedMinutes <= 0)
             return new ChargeResult(0m, 0m, breakdown);
 
-        var localEntry = ToLocal(input.EntryTime, input.Timezone);
-        var isWeekend = localEntry.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
-        var isHoliday = rules.Holidays.Contains(localEntry.ToString("yyyy-MM-dd"));
-
-        var block = SelectBlock(rules, input.VehicleType, isWeekend, isHoliday, out var blockLabel);
-        var baseAmount = ComputeBlock(block, billedMinutes, includeBreakdown ? breakdown : new List<PricingLineItem>(), blockLabel);
+        var localEntry = PricingRuleSelector.ToLocal(input.EntryTime, input.Timezone);
+        var selection = PricingRuleSelector.SelectBlock(rules, input.VehicleType, input.EntryTime, input.Timezone);
+        var baseAmount = ComputeBlock(selection.Block, billedMinutes, includeBreakdown ? breakdown : new List<PricingLineItem>(), selection.Label);
 
         // Day/holiday multipliers applied after the base computation.
-        if (isHoliday && rules.HolidayMultiplier is { } hm && hm != 1m)
+        if (selection.IsHoliday && rules.HolidayMultiplier is { } hm && hm != 1m)
         {
             var delta = Round(baseAmount * hm) - baseAmount;
             baseAmount = Round(baseAmount * hm);
             if (includeBreakdown) breakdown.Add(new PricingLineItem("holiday_multiplier", $"Holiday rate ×{hm}", delta));
         }
-        else if (isWeekend && rules.WeekendMultiplier is { } wm && wm != 1m)
+        else if (selection.IsWeekend && rules.WeekendMultiplier is { } wm && wm != 1m)
         {
             var delta = Round(baseAmount * wm) - baseAmount;
             baseAmount = Round(baseAmount * wm);
@@ -133,19 +130,6 @@ public sealed class ParkingFeeCalculator : IParkingFeeCalculator
         coveredSeconds += (current.To - current.From).TotalSeconds;
         var billableSeconds = Math.Max(0d, totalSeconds - coveredSeconds);
         return (int)Math.Min(int.MaxValue, Math.Ceiling(billableSeconds / 60d));
-    }
-
-    private static RateBlock SelectBlock(PricingRules rules, VehicleType vehicleType, bool isWeekend, bool isHoliday, out string label)
-    {
-        if (isHoliday && rules.Holiday is not null) { label = "Holiday rate"; return rules.Holiday; }
-        if (isWeekend && rules.Weekend is not null) { label = "Weekend rate"; return rules.Weekend; }
-        if (rules.VehicleRates.TryGetValue(vehicleType.ToString(), out var vehicleBlock))
-        {
-            label = $"{vehicleType} rate";
-            return vehicleBlock;
-        }
-        label = "Parking fee";
-        return rules.Default;
     }
 
     private static decimal ComputeBlock(RateBlock block, int billedMinutes, List<PricingLineItem> breakdown, string label)
@@ -233,19 +217,6 @@ public sealed class ParkingFeeCalculator : IParkingFeeCalculator
                 return true;
         }
         return false;
-    }
-
-    private static DateTime ToLocal(DateTimeOffset utc, string timezone)
-    {
-        try
-        {
-            var tz = TimeZoneInfo.FindSystemTimeZoneById(timezone);
-            return TimeZoneInfo.ConvertTime(utc, tz).DateTime;
-        }
-        catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException)
-        {
-            return utc.UtcDateTime;
-        }
     }
 
     private static decimal Round(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);

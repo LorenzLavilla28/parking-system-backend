@@ -9,6 +9,7 @@ using ParkingSaaS.Application.Emails;
 using ParkingSaaS.Application.Guard;
 using ParkingSaaS.Application.Locations;
 using ParkingSaaS.Application.Payments;
+using ParkingSaaS.Application.Platform;
 using ParkingSaaS.Application.Pricing;
 using ParkingSaaS.Application.RatePlans;
 using ParkingSaaS.Application.Reports;
@@ -31,6 +32,7 @@ public static class DependencyInjection
         services.AddScoped<ICorporateBenefitAllocationService, CorporateBenefitAllocationService>();
         services.AddScoped<IUserService, UserService>();
         services.AddScoped<ITenantProvisioningService, TenantProvisioningService>();
+        services.AddScoped<IPlatformAdministratorService, PlatformAdministratorService>();
         services.AddScoped<ITenantBrandingService, TenantBrandingService>();
 
         services.AddScoped<IGuardEntryService, GuardEntryService>();

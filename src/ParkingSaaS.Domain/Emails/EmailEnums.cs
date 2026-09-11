@@ -8,7 +8,10 @@ public enum EmailKind
     UserWelcome = 3,
     PasswordReset = 4,
     OverstayNotice = 5,
-    OperationsSummary = 6
+    OperationsSummary = 6,
+    PlatformAdminInvitation = 7,
+    PlatformAdminAccessGranted = 8,
+    TenantAccessGranted = 9
 }
 
 /// <summary>

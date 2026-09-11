@@ -27,6 +27,28 @@ public sealed class EmailQueue : IEmailQueue
             tenantId, toEmail, adminName, tenantName, tenantSlug, temporaryPassword, _options.AppBaseUrl, now, _options.MaxAttempts));
     }
 
+    public void QueuePlatformAdministratorInvitation(string toEmail, string adminName, string temporaryPassword, DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(toEmail)) return;
+        _db.Emails.Add(EmailTemplates.PlatformAdministratorInvitation(
+            toEmail, adminName, temporaryPassword, _options.AppBaseUrl, now, _options.MaxAttempts));
+    }
+
+    public void QueuePlatformAdministratorAccessGranted(string toEmail, string adminName, DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(toEmail)) return;
+        _db.Emails.Add(EmailTemplates.PlatformAdministratorAccessGranted(
+            toEmail, adminName, _options.AppBaseUrl, now, _options.MaxAttempts));
+    }
+
+    public void QueueTenantAccessGranted(Guid tenantId, string toEmail, string userName, string tenantName,
+        IReadOnlyCollection<string> roles, DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(toEmail)) return;
+        _db.Emails.Add(EmailTemplates.TenantAccessGranted(
+            tenantId, toEmail, userName, tenantName, roles, _options.AppBaseUrl, now, _options.MaxAttempts));
+    }
+
     public void QueuePaymentReceipt(Guid tenantId, string toEmail, PaymentReceiptEmailData data, DateTimeOffset now)
     {
         if (string.IsNullOrWhiteSpace(toEmail)) return;

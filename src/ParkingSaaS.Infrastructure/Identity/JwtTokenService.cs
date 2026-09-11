@@ -25,7 +25,7 @@ public sealed class JwtTokenService : IJwtTokenService
         _credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
     }
 
-    public AccessToken CreateAccessToken(ApplicationUser user)
+    public AccessToken CreateAccessToken(ApplicationUser user, Guid tenantId)
     {
         var now = _clock.UtcNow;
         var expires = now.AddMinutes(_options.AccessTokenMinutes);
@@ -35,18 +35,25 @@ public sealed class JwtTokenService : IJwtTokenService
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new(ClaimTypes.NameIdentifier, user.Id.ToString()),
             new(JwtRegisteredClaimNames.Email, user.Email),
-            new(AppClaimTypes.TenantId, user.TenantId.ToString()),
+            // The token must carry the selected context, not the account's
+            // legacy/default tenant. A dual-access account may be switching
+            // between a tenant and the platform, so downstream tenancy,
+            // auditing, and authorization services must see the active scope.
+            new(AppClaimTypes.TenantId, tenantId.ToString()),
             new(AppClaimTypes.PasswordChanged, (!user.MustChangePassword).ToString().ToLowerInvariant()),
             new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
 
         // A guard/supervisor assigned to exactly one location carries it as a claim
         // so the tenant context can scope to that location without a DB round-trip.
-        var assignedLocations = user.LocationAssignments.Select(a => a.ParkingLocationId).ToArray();
+        var assignedLocations = user.LocationAssignments
+            .Where(a => a.TenantId == tenantId)
+            .Select(a => a.ParkingLocationId)
+            .ToArray();
         if (assignedLocations.Length == 1)
             claims.Add(new Claim(AppClaimTypes.LocationId, assignedLocations[0].ToString()));
 
-        foreach (var role in user.Roles)
+        foreach (var role in user.Roles.Where(r => r.TenantId == tenantId))
             claims.Add(new Claim(ClaimTypes.Role, RoleNames.ToName(role.Role)));
 
         var token = new JwtSecurityToken(
@@ -60,4 +67,8 @@ public sealed class JwtTokenService : IJwtTokenService
         var value = new JwtSecurityTokenHandler().WriteToken(token);
         return new AccessToken(value, expires);
     }
+
+    // Compatibility overload for callers that have not yet selected a context.
+    public AccessToken CreateAccessToken(ApplicationUser user)
+        => CreateAccessToken(user, user.TenantId);
 }

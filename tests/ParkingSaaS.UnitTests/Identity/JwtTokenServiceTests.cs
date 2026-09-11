@@ -54,4 +54,20 @@ public sealed class JwtTokenServiceTests
 
         jwt.Claims.Should().NotContain(c => c.Type == AppClaimTypes.LocationId);
     }
+
+    [Fact]
+    public void Access_token_uses_the_selected_context_for_dual_access_accounts()
+    {
+        var tenantId = Guid.NewGuid();
+        var user = new ApplicationUser(tenantId, "Alex", "Admin", "alex@demo.local", "hash");
+        user.AddRole(RoleType.TenantAdministrator, tenantId);
+        user.AddRole(RoleType.PlatformAdministrator, Guid.Empty);
+
+        var token = CreateService().CreateAccessToken(user, Guid.Empty);
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(token.Value);
+
+        jwt.Claims.Should().Contain(c => c.Type == AppClaimTypes.TenantId && c.Value == Guid.Empty.ToString());
+        jwt.Claims.Should().Contain(c => c.Type == ClaimTypes.Role && c.Value == nameof(RoleType.PlatformAdministrator));
+        jwt.Claims.Should().NotContain(c => c.Type == ClaimTypes.Role && c.Value == nameof(RoleType.TenantAdministrator));
+    }
 }

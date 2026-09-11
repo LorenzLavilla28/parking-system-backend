@@ -135,7 +135,8 @@ public sealed class SessionPricingService : ISessionPricingService
                     .Select(l => l.Timezone)
                     .FirstOrDefaultAsync(ct) ?? "UTC";
                 var rules = PricingRules.Parse(version.RulesJson);
-                var block = SelectBlock(rules, session.VehicleType, session.EntryTime, timezone);
+                var block = PricingRuleSelector.SelectBlock(
+                    rules, session.VehicleType, session.EntryTime, timezone).Block;
 
                 if (block.Type == RateType.FirstBlock && block.FirstHours > 0)
                 {
@@ -149,29 +150,4 @@ public sealed class SessionPricingService : ISessionPricingService
         return paidThrough.AddMinutes(graceMinutes);
     }
 
-    private static RateBlock SelectBlock(
-        PricingRules rules, VehicleType vehicleType, DateTimeOffset entryTime, string timezone)
-    {
-        var localEntry = ToLocal(entryTime, timezone);
-        var isWeekend = localEntry.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
-        var isHoliday = rules.Holidays.Contains(localEntry.ToString("yyyy-MM-dd"));
-
-        if (isHoliday && rules.Holiday is not null) return rules.Holiday;
-        if (isWeekend && rules.Weekend is not null) return rules.Weekend;
-        if (rules.VehicleRates.TryGetValue(vehicleType.ToString(), out var vehicleBlock)) return vehicleBlock;
-        return rules.Default;
-    }
-
-    private static DateTime ToLocal(DateTimeOffset value, string timezone)
-    {
-        try
-        {
-            var tz = TimeZoneInfo.FindSystemTimeZoneById(timezone);
-            return TimeZoneInfo.ConvertTime(value, tz).DateTime;
-        }
-        catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException)
-        {
-            return value.UtcDateTime;
-        }
-    }
 }

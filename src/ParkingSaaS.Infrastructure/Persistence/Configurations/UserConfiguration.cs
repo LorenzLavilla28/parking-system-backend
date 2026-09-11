@@ -21,6 +21,11 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<ApplicationUser
         b.HasIndex(u => u.Email).IsUnique();
         b.HasIndex(u => new { u.TenantId, u.Email });
 
+        b.HasMany(u => u.Memberships)
+            .WithOne()
+            .HasForeignKey(m => m.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+
         b.HasMany(u => u.Roles)
             .WithOne()
             .HasForeignKey(r => r.UserId)
@@ -32,6 +37,7 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<ApplicationUser
             .OnDelete(DeleteBehavior.Cascade);
 
         b.Navigation(u => u.Roles).UsePropertyAccessMode(PropertyAccessMode.Field);
+        b.Navigation(u => u.Memberships).UsePropertyAccessMode(PropertyAccessMode.Field);
         b.Navigation(u => u.LocationAssignments).UsePropertyAccessMode(PropertyAccessMode.Field);
     }
 }
@@ -42,8 +48,21 @@ public sealed class UserRoleConfiguration : IEntityTypeConfiguration<UserRole>
     {
         b.ToTable("user_roles");
         b.HasKey(r => r.Id);
+        b.Property(r => r.TenantId).IsRequired();
         b.Property(r => r.Role).HasConversion<string>().HasMaxLength(32);
-        b.HasIndex(r => new { r.UserId, r.Role }).IsUnique();
+        b.HasIndex(r => new { r.UserId, r.TenantId, r.Role }).IsUnique();
+    }
+}
+
+public sealed class UserMembershipConfiguration : IEntityTypeConfiguration<UserMembership>
+{
+    public void Configure(EntityTypeBuilder<UserMembership> b)
+    {
+        b.ToTable("user_memberships");
+        b.HasKey(m => m.Id);
+        b.Property(m => m.TenantId).IsRequired();
+        b.Property(m => m.Status).HasConversion<string>().HasMaxLength(32);
+        b.HasIndex(m => new { m.UserId, m.TenantId }).IsUnique();
     }
 }
 
@@ -53,7 +72,7 @@ public sealed class UserParkingLocationConfiguration : IEntityTypeConfiguration<
     {
         b.ToTable("user_parking_locations");
         b.HasKey(a => a.Id);
-        b.HasIndex(a => new { a.UserId, a.ParkingLocationId }).IsUnique();
+        b.HasIndex(a => new { a.UserId, a.TenantId, a.ParkingLocationId }).IsUnique();
         b.HasIndex(a => new { a.TenantId, a.ParkingLocationId });
     }
 }

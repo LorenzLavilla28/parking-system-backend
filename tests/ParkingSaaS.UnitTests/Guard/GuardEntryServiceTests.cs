@@ -9,6 +9,8 @@ using ParkingSaaS.Application.Guard;
 using ParkingSaaS.Contracts.Guard;
 using ParkingSaaS.Contracts.Realtime;
 using ParkingSaaS.Domain.Locations;
+using ParkingSaaS.Domain.Pricing;
+using ParkingSaaS.Domain.RatePlans;
 using ParkingSaaS.Domain.Sessions;
 using ParkingSaaS.Domain.Services;
 using ParkingSaaS.Domain.Users;
@@ -55,8 +57,29 @@ public sealed class GuardEntryServiceTests
     private void SeedLocation()
     {
         _location = new ParkingLocation(_tenantId, "Lot", "lot", "Asia/Manila", null);
-        _location.AssignRatePlan(Guid.NewGuid());
+        var ratePlanId = Guid.NewGuid();
+        _location.AssignRatePlan(ratePlanId);
         _db.ParkingLocations.Add(_location);
+        var rules = new PricingRules
+        {
+            Default = new RateBlock
+            {
+                Type = RateType.FirstBlock,
+                FirstHours = 2,
+                FirstAmount = 150m,
+                IncrementAmount = 100m,
+                IncrementUnit = IncrementUnit.Hour,
+            },
+        };
+        var version = new RatePlanVersion(
+            _tenantId,
+            ratePlanId,
+            1,
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            rules.Serialize(),
+            _user.UserId!.Value);
+        _ratePlans.VersionId = version.Id;
+        _db.RatePlanVersions.Add(version);
         _db.SaveChanges();
     }
 
@@ -82,6 +105,9 @@ public sealed class GuardEntryServiceTests
         ticket.TicketCode.Should().HaveLength(6);
         ticket.PaymentUrl.Should().Contain("/p/");
         ticket.QrCodeDataUri.Should().StartWith("data:image/png");
+        ticket.RateBreakdown.Should().ContainInOrder(
+            new EntryRateLine("first_block", "First 2 hours or part thereof", 150m),
+            new EntryRateLine("succeeding", "Succeeding hour or part thereof", 100m));
 
         var saved = await _db.ParkingSessions.SingleAsync();
         saved.Status.Should().Be(ParkingSessionStatus.ActiveUnpaid);

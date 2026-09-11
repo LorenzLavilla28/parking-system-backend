@@ -28,6 +28,7 @@ public sealed class AppDbContext : DbContext, IApplicationDbContext
 
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<ApplicationUser> Users => Set<ApplicationUser>();
+    public DbSet<UserMembership> UserMemberships => Set<UserMembership>();
     public DbSet<UserRole> UserRoles => Set<UserRole>();
     public DbSet<UserParkingLocation> UserParkingLocations => Set<UserParkingLocation>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
@@ -54,7 +55,13 @@ public sealed class AppDbContext : DbContext, IApplicationDbContext
         // Global tenant filters. The lambdas capture this context instance; EF
         // re-reads the tenant values as query parameters at execution time.
         modelBuilder.Entity<ApplicationUser>()
-            .HasQueryFilter(u => _tenant.IsPlatformAdministrator || u.TenantId == _tenant.TenantId);
+            .HasQueryFilter(u => _tenant.IsPlatformAdministrator
+                || u.TenantId == _tenant.TenantId
+                || u.Memberships.Any(m => m.TenantId == _tenant.TenantId));
+        modelBuilder.Entity<UserMembership>()
+            .HasQueryFilter(m => _tenant.IsPlatformAdministrator || m.TenantId == _tenant.TenantId);
+        modelBuilder.Entity<UserRole>()
+            .HasQueryFilter(r => _tenant.IsPlatformAdministrator || r.TenantId == _tenant.TenantId);
         modelBuilder.Entity<PasswordResetToken>()
             .HasQueryFilter(t => _tenant.IsPlatformAdministrator || t.TenantId == _tenant.TenantId);
         modelBuilder.Entity<UserParkingLocation>()
@@ -145,5 +152,26 @@ public sealed class AppDbContext : DbContext, IApplicationDbContext
         await Database.ExecuteSqlInterpolatedAsync(
             $"SELECT 1 FROM tenants WHERE \"Id\" = {tenantId} FOR UPDATE",
             cancellationToken);
+    }
+
+    public async Task LockUserAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        if (Database.ProviderName?.Contains("InMemory", StringComparison.OrdinalIgnoreCase) == true)
+            return;
+
+        if (_tenant.IsPlatformAdministrator)
+        {
+            await Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT 1 FROM users WHERE \"Id\" = {userId} FOR UPDATE",
+                cancellationToken);
+            return;
+        }
+
+        if (_tenant.HasTenant)
+        {
+                await Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT 1 FROM users WHERE \"Id\" = {userId} AND (\"TenantId\" = {_tenant.TenantId} OR EXISTS (SELECT 1 FROM user_memberships m WHERE m.\"UserId\" = users.\"Id\" AND m.\"TenantId\" = {_tenant.TenantId})) FOR UPDATE",
+                cancellationToken);
+        }
     }
 }

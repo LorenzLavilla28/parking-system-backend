@@ -39,6 +39,52 @@ public static class EmailTemplates
         return EmailMessage.Create(EmailKind.TenantOnboarding, toEmail, adminName, subject, html, text, now, tenantId, maxAttempts);
     }
 
+    public static EmailMessage PlatformAdministratorInvitation(
+        string toEmail, string adminName, string temporaryPassword, string appBaseUrl,
+        DateTimeOffset now, int maxAttempts)
+    {
+        var name = E(adminName);
+        var loginUrl = $"{appBaseUrl.TrimEnd('/')}/login";
+        var subject = $"You're invited to the {ProductName} Platform Console";
+
+        var html = Wrap($"Welcome, {name}", $$"""
+            <p>You have been invited to administer the {{ProductName}} platform.</p>
+            <p>Use the credentials below to sign in to the Platform Console.</p>
+            <p><strong>Email:</strong> <code>{{E(toEmail)}}</code></p>
+            <p><strong>Temporary password:</strong> <code>{{E(temporaryPassword)}}</code></p>
+            <p style="color:#b45309;font-size:13px">For your security, you must change this password the first time you sign in.</p>
+            <p style="margin:24px 0"><a href="{{E(loginUrl)}}" style="background:#0f172a;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block">Open Platform Console</a></p>
+            """);
+
+        var text = $"Welcome, {adminName}\n\nYou have been invited to administer the {ProductName} platform. " +
+                   $"Sign in to the Platform Console: {loginUrl}\nEmail: {toEmail}\nTemporary password: {temporaryPassword}\n" +
+                   "You must change this password the first time you sign in.";
+
+        return EmailMessage.Create(
+            EmailKind.PlatformAdminInvitation, toEmail, adminName, subject, html, text, now, null, maxAttempts);
+    }
+
+    public static EmailMessage PlatformAdministratorAccessGranted(
+        string toEmail, string adminName, string appBaseUrl,
+        DateTimeOffset now, int maxAttempts)
+    {
+        var name = E(adminName);
+        var loginUrl = $"{appBaseUrl.TrimEnd('/')}/login";
+        var subject = $"You now have access to the {ProductName} Platform Console";
+
+        var html = Wrap($"Platform access granted, {name}", $$"""
+            <p>Your existing {{ProductName}} account has been granted access to the Platform Console.</p>
+            <p>Sign in with your existing password. Your tenant workspace access remains available as well.</p>
+            <p style="margin:24px 0"><a href="{{E(loginUrl)}}" style="background:#0f172a;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block">Open Platform Console</a></p>
+            """);
+
+        var text = $"Hello, {adminName}\n\nYour existing {ProductName} account now has access to the Platform Console. " +
+                   $"Sign in with your existing password: {loginUrl}";
+
+        return EmailMessage.Create(
+            EmailKind.PlatformAdminAccessGranted, toEmail, adminName, subject, html, text, now, null, maxAttempts);
+    }
+
     public static EmailMessage PaymentReceipt(
         Guid tenantId, string toEmail, PaymentReceiptEmailData d, DateTimeOffset now, int maxAttempts)
     {
@@ -191,6 +237,29 @@ public static class EmailTemplates
                    $"You must change this password the first time you sign in. Sign in: {loginUrl}";
 
         return EmailMessage.Create(EmailKind.UserWelcome, toEmail, userName, subject, html, text, now, tenantId, maxAttempts);
+    }
+
+    public static EmailMessage TenantAccessGranted(
+        Guid tenantId, string toEmail, string userName, string tenantName,
+        IReadOnlyCollection<string> roles, string appBaseUrl, DateTimeOffset now, int maxAttempts)
+    {
+        var name = E(userName);
+        var org = E(tenantName);
+        var roleList = E(string.Join(", ", roles));
+        var loginUrl = $"{appBaseUrl.TrimEnd('/')}/login";
+        var subject = $"You now have access to {tenantName} on {ProductName}";
+
+        var html = Wrap($"Access granted, {name}", $$"""
+            <p>Your existing {{ProductName}} account now has access to <strong>{{org}}</strong>.</p>
+            <p>Your role(s): <strong>{{roleList}}</strong></p>
+            <p>Sign in with your existing password. Your other workspace access remains unchanged.</p>
+            <p style="margin:24px 0"><a href="{{E(loginUrl)}}" style="background:#0f172a;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block">Sign in</a></p>
+            """);
+
+        var text = $"Hello, {userName}\n\nYour existing {ProductName} account now has access to {tenantName}. " +
+                   $"Role(s): {string.Join(", ", roles)}. Sign in with your existing password: {loginUrl}";
+
+        return EmailMessage.Create(EmailKind.TenantAccessGranted, toEmail, userName, subject, html, text, now, tenantId, maxAttempts);
     }
 
     public static EmailMessage PasswordReset(

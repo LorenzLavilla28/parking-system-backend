@@ -1,6 +1,8 @@
 namespace ParkingSaaS.Contracts.Auth;
 
-public sealed record LoginRequest(string Email, string Password);
+public sealed record LoginRequest(string Email, string Password, Guid? TenantId = null);
+
+public sealed record SwitchContextRequest(Guid TenantId);
 
 public sealed record RefreshRequest(string RefreshToken);
 
@@ -23,7 +25,16 @@ public sealed record AuthUserDto(
     IReadOnlyCollection<string> Roles,
     IReadOnlyCollection<Guid> AssignedLocationIds,
     bool MustChangePassword,
-    string TenantStatus);
+    string TenantStatus,
+    IReadOnlyCollection<AuthContextDto> AvailableContexts);
+
+public sealed record AuthContextDto(
+    Guid TenantId,
+    string TenantName,
+    string TenantStatus,
+    IReadOnlyCollection<string> Roles,
+    IReadOnlyCollection<Guid> AssignedLocationIds,
+    bool IsPlatform);
 
 public sealed record AuthResponse(
     string AccessToken,

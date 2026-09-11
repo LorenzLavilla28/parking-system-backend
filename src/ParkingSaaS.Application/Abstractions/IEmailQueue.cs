@@ -35,6 +35,13 @@ public interface IEmailQueue
 {
     void QueueTenantOnboarding(Guid tenantId, string toEmail, string adminName, string tenantName, string tenantSlug, string temporaryPassword, DateTimeOffset now);
 
+    void QueuePlatformAdministratorInvitation(string toEmail, string adminName, string temporaryPassword, DateTimeOffset now);
+
+    void QueuePlatformAdministratorAccessGranted(string toEmail, string adminName, DateTimeOffset now);
+
+    void QueueTenantAccessGranted(Guid tenantId, string toEmail, string userName, string tenantName,
+        IReadOnlyCollection<string> roles, DateTimeOffset now);
+
     void QueuePaymentReceipt(Guid tenantId, string toEmail, PaymentReceiptEmailData data, DateTimeOffset now);
 
     void QueueOverstayNotice(Guid tenantId, string toEmail, OverstayNoticeEmailData data, DateTimeOffset now);

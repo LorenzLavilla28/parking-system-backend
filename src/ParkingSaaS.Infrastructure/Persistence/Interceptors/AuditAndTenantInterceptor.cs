@@ -11,7 +11,8 @@ namespace ParkingSaaS.Infrastructure.Persistence.Interceptors;
 /// On every save: stamps audit timestamps, fills <see cref="ITenantOwned.TenantId"/>
 /// from the ambient tenant when an entity is created without one, and rejects any
 /// attempt to write a row belonging to a different tenant. Platform administrators
-/// may set an explicit TenantId (e.g. provisioning a new tenant's first admin).
+/// may set an explicit TenantId (e.g. provisioning a new tenant's first admin
+/// or granting a tenant membership from the platform console).
 /// </summary>
 public sealed class AuditAndTenantInterceptor : SaveChangesInterceptor
 {

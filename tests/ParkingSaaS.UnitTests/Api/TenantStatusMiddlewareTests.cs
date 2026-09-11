@@ -6,6 +6,7 @@ using ParkingSaaS.Api.Middleware;
 using ParkingSaaS.Application.Common;
 using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Domain.Tenants;
+using ParkingSaaS.Domain.Users;
 using ParkingSaaS.Infrastructure.Identity;
 using ParkingSaaS.Infrastructure.Persistence;
 using ParkingSaaS.UnitTests.Common;
@@ -48,6 +49,37 @@ public sealed class TenantStatusMiddlewareTests
         await middleware.InvokeAsync(CreateContext(db.Tenants.Single().Id, "/api/tenant/payments"), db);
 
         nextCalled.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Disabled_membership_is_blocked_even_when_the_tenant_is_active()
+    {
+        var tenantId = Guid.NewGuid();
+        await using var db = CreateDb(tenantId, TenantStatus.Active);
+        var user = new ApplicationUser(
+            tenantId,
+            "Disabled",
+            "Member",
+            "disabled-member@example.test",
+            "hash");
+        user.AddRole(RoleType.TenantAdministrator, tenantId);
+        user.GetMembership(tenantId)!.Disable();
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+
+        var nextCalled = false;
+        var middleware = new TenantStatusMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+
+        var act = () => middleware.InvokeAsync(
+            CreateContext(db.Tenants.Single().Id, "/api/tenant/payments", user.Id),
+            db);
+
+        await act.Should().ThrowAsync<UnauthorizedAppException>();
+        nextCalled.Should().BeFalse();
     }
 
     [Fact]
@@ -104,15 +136,18 @@ public sealed class TenantStatusMiddlewareTests
         return db;
     }
 
-    private static DefaultHttpContext CreateContext(Guid tenantId, string path)
+    private static DefaultHttpContext CreateContext(Guid tenantId, string path, Guid? userId = null)
     {
         var context = new DefaultHttpContext();
         context.Request.Path = path;
-        context.User = new ClaimsPrincipal(new ClaimsIdentity(new[]
+        var claims = new List<Claim>
         {
-            new Claim(AppClaimTypes.TenantId, tenantId.ToString()),
-            new Claim(ClaimTypes.Role, RoleNames.TenantAdministrator),
-        }, "test"));
+            new(AppClaimTypes.TenantId, tenantId.ToString()),
+            new(ClaimTypes.Role, RoleNames.TenantAdministrator),
+        };
+        if (userId.HasValue)
+            claims.Add(new Claim(ClaimTypes.NameIdentifier, userId.Value.ToString()));
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
         return context;
     }
 }

@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using ParkingSaaS.Application.Auth;
 using ParkingSaaS.Contracts.Auth;
 using ParkingSaaS.Contracts.Common;
+using ParkingSaaS.Infrastructure.Identity;
 
 namespace ParkingSaaS.Api.Controllers;
 
@@ -22,7 +23,10 @@ public sealed class AccountController : ApiControllerBase
         if (!Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))
             return Unauthorized();
 
-        var result = await _auth.ChangePasswordAsync(request, userId, ClientIp, ct);
+        var tenantId = Guid.TryParse(User.FindFirstValue(AppClaimTypes.TenantId), out var parsedTenantId)
+            ? parsedTenantId
+            : Guid.Empty;
+        var result = await _auth.ChangePasswordAsync(request, userId, tenantId, ClientIp, ct);
         return Ok(ApiResponse<AuthResponse>.Ok(result));
     }
 }

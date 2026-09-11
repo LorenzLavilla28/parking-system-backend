@@ -8,6 +8,8 @@ public sealed record RecordEntryRequest(
     string? EntryPhotoUrl,
     Guid? CorporateBenefitProgramId = null);
 
+public sealed record EntryRateLine(string Code, string Description, decimal Amount);
+
 /// <summary>
 /// Returned once at entry. Carries the raw public token, ticket code, payment
 /// URL and a ready-to-render QR image so the guard can print or display it.
@@ -24,7 +26,9 @@ public sealed record EntryTicketResponse(
     string LocationName,
     bool CorporateBenefitApplied = false,
     string? CorporateBenefitProgramName = null,
-    string? CorporateBenefitMessage = null);
+    string? CorporateBenefitMessage = null,
+    string RateCurrency = "PHP",
+    IReadOnlyList<EntryRateLine>? RateBreakdown = null);
 
 public sealed record SessionSummaryResponse(
     Guid Id,

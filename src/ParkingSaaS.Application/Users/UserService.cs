@@ -33,12 +33,53 @@ public sealed class UserService : IUserService
     public async Task<UserResponse> CreateAsync(CreateUserRequest request, CancellationToken ct)
     {
         var email = request.Email.Trim().ToLowerInvariant();
-        var emailTaken = await _db.Users.IgnoreQueryFilters().AnyAsync(u => u.Email == email, ct);
-        if (emailTaken)
-            throw new ConflictException("A user with this email already exists.");
-
         var roles = ParseRoles(request.Roles);
         var locationIds = await ValidateLocationsAsync(request.AssignedLocationIds, ct);
+
+        var existing = await _db.Users
+            .IgnoreQueryFilters()
+            .Include(u => u.Roles)
+            .Include(u => u.Memberships)
+            .Include(u => u.LocationAssignments)
+            .FirstOrDefaultAsync(u => u.Email == email, ct);
+
+        if (existing is not null)
+        {
+            if (!existing.CanAuthenticate)
+                throw new ConflictException("This account is disabled and cannot receive tenant access.");
+
+            var membership = existing.Memberships.FirstOrDefault(m => m.TenantId == _tenant.TenantId);
+            var newMembership = membership is null;
+            var alreadyHasTenantRole = existing.Roles.Any(r => r.TenantId == _tenant.TenantId);
+            if (alreadyHasTenantRole && membership?.IsActive == true)
+                throw new ConflictException("This account already has access to this tenant.");
+
+            membership ??= new UserMembership(existing.Id, _tenant.TenantId);
+            membership.Enable();
+            if (newMembership) _db.UserMemberships.Add(membership);
+
+            foreach (var role in roles)
+            {
+                if (existing.Roles.All(r => r.TenantId != _tenant.TenantId || r.Role != role))
+                    _db.UserRoles.Add(new UserRole(existing.Id, role, _tenant.TenantId));
+            }
+
+            foreach (var locationId in locationIds)
+            {
+                if (existing.LocationAssignments.All(a => a.TenantId != _tenant.TenantId || a.ParkingLocationId != locationId))
+                    _db.UserParkingLocations.Add(new UserParkingLocation(existing.Id, locationId, _tenant.TenantId));
+            }
+
+            var existingTenantName = await _db.Tenants
+                .Where(t => t.Id == _tenant.TenantId)
+                .Select(t => t.Name)
+                .FirstOrDefaultAsync(ct) ?? "your organization";
+            _emailQueue.QueueTenantAccessGranted(
+                _tenant.TenantId, existing.Email, existing.FullName, existingTenantName,
+                roles.Select(RoleNames.ToName).ToArray(), _clock.UtcNow);
+            await _db.SaveChangesAsync(ct);
+            return ToResponse(existing, _tenant.TenantId);
+        }
 
         var user = new ApplicationUser(
             _tenant.TenantId,
@@ -48,8 +89,8 @@ public sealed class UserService : IUserService
             _passwordHasher.Hash(request.Password),
             mustChangePassword: true);
 
-        foreach (var role in roles) user.AddRole(role);
-        foreach (var locationId in locationIds) user.AssignLocation(locationId);
+        foreach (var role in roles) user.AddRole(role, _tenant.TenantId);
+        foreach (var locationId in locationIds) user.AssignLocation(locationId, _tenant.TenantId);
 
         await _db.Users.AddAsync(user, ct);
 
@@ -63,50 +104,144 @@ public sealed class UserService : IUserService
             tenantName, roles.Select(RoleNames.ToName).ToArray(), request.Password, _clock.UtcNow);
 
         await _db.SaveChangesAsync(ct);
-        return ToResponse(user);
+        return ToResponse(user, _tenant.TenantId);
     }
 
     public async Task<UserResponse> UpdateAsync(Guid id, UpdateUserRequest request, CancellationToken ct)
     {
-        var user = await _db.Users
-            .Include(u => u.Roles)
-            .Include(u => u.LocationAssignments)
-            .FirstOrDefaultAsync(u => u.Id == id, ct)
-            ?? throw new NotFoundException("User not found.");
+        UserResponse? response = null;
 
-        // Rebuild role set.
-        var desiredRoles = ParseRoles(request.Roles);
-        foreach (var existing in user.Roles.Select(r => r.Role).ToArray())
-            if (!desiredRoles.Contains(existing)) user.RemoveRole(existing);
-        foreach (var role in desiredRoles) user.AddRole(role);
+        try
+        {
+            // User updates rebuild role and location collections. Lock the aggregate
+            // before loading it so two stale admin forms cannot both mutate the same
+            // child row and make EF report a zero-row update/delete.
+            await _db.ExecuteInTransactionAsync(async txct =>
+            {
+                await _db.LockUserAsync(id, txct);
 
-        // Rebuild location assignments.
-        var desiredLocations = await ValidateLocationsAsync(request.AssignedLocationIds, ct);
-        foreach (var existing in user.LocationAssignments.Select(a => a.ParkingLocationId).ToArray())
-            if (!desiredLocations.Contains(existing)) user.UnassignLocation(existing);
-        foreach (var locationId in desiredLocations) user.AssignLocation(locationId);
+                var user = await _db.Users
+                    .Include(u => u.Roles)
+                    .Include(u => u.Memberships)
+                    .Include(u => u.LocationAssignments)
+                    .FirstOrDefaultAsync(u => u.Id == id, txct)
+                    ?? throw new NotFoundException("User not found.");
 
-        if (request.IsActive) user.Enable(); else user.Disable();
+                // Rebuild role set.
+                var desiredRoles = ParseRoles(request.Roles);
+                await EnsureTenantAdministratorRemainsAsync(user, desiredRoles, request.IsActive, txct);
+                foreach (var existing in user.Roles.Select(r => r.Role).ToArray())
+                    if (!desiredRoles.Contains(existing)) user.RemoveRole(existing, _tenant.TenantId);
+                foreach (var role in desiredRoles) user.AddRole(role, _tenant.TenantId);
 
-        await _db.SaveChangesAsync(ct);
-        return ToResponse(user);
+                // Rebuild location assignments.
+                var desiredLocations = await ValidateLocationsAsync(request.AssignedLocationIds, txct);
+                var existingLocationIds = user.LocationAssignments
+                    .Select(a => a.ParkingLocationId)
+                    .ToHashSet();
+
+                foreach (var existing in user.LocationAssignments.Select(a => a.ParkingLocationId).ToArray())
+                    if (!desiredLocations.Contains(existing)) user.UnassignLocation(existing, _tenant.TenantId);
+
+                foreach (var locationId in desiredLocations) user.AssignLocation(locationId, _tenant.TenantId);
+
+                // ApplicationUser creates GUID keys in the domain. Because those
+                // keys are non-default, EF can infer Modified instead of Added
+                // when a new child is introduced through the navigation alone.
+                // Explicitly add only the new join rows so PostgreSQL performs an
+                // INSERT rather than an UPDATE that affects zero rows.
+                foreach (var assignment in user.LocationAssignments
+                             .Where(a => !existingLocationIds.Contains(a.ParkingLocationId)))
+                {
+                    _db.UserParkingLocations.Add(assignment);
+                }
+
+                var membership = user.Memberships.FirstOrDefault(m => m.TenantId == _tenant.TenantId)
+                    ?? throw new NotFoundException("User membership not found.");
+                if (request.IsActive)
+                {
+                    membership.Enable();
+                }
+                else
+                {
+                    membership.Disable();
+
+                    // Access tokens are checked by the tenant middleware on
+                    // every request, but refresh tokens are otherwise valid
+                    // until expiry. Revoke this tenant's refresh sessions so
+                    // re-enabling the membership cannot resurrect an old
+                    // credential.
+                    var now = _clock.UtcNow;
+                    var refreshTokens = await _db.RefreshTokens
+                        .IgnoreQueryFilters()
+                        .Where(token => token.UserId == user.Id
+                            && token.TenantId == _tenant.TenantId
+                            && token.RevokedAt == null)
+                        .ToListAsync(txct);
+                    foreach (var refreshToken in refreshTokens)
+                        refreshToken.Revoke(now);
+                }
+
+                await _db.SaveChangesAsync(txct);
+                response = ToResponse(user, _tenant.TenantId);
+            }, ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new ConflictException(
+                "This user was changed by another request. Refresh the user and try again.");
+        }
+
+        return response ?? throw new InvalidOperationException("The user update did not produce a response.");
+    }
+
+    private async Task EnsureTenantAdministratorRemainsAsync(
+        ApplicationUser user,
+        IReadOnlyCollection<RoleType> desiredRoles,
+        bool remainsActive,
+        CancellationToken ct)
+    {
+        var membership = user.Memberships.FirstOrDefault(m => m.TenantId == _tenant.TenantId);
+        var isCurrentAdministrator = user.Roles.Any(r =>
+            r.TenantId == _tenant.TenantId && r.Role == RoleType.TenantAdministrator);
+
+        if (membership?.IsActive != true
+            || !isCurrentAdministrator
+            || (remainsActive && desiredRoles.Contains(RoleType.TenantAdministrator)))
+            return;
+
+        var anotherActiveAdministratorExists = await _db.Users
+            .Where(candidate => candidate.Id != user.Id)
+            .AnyAsync(candidate =>
+                candidate.Status == UserStatus.Active
+                && candidate.Memberships.Any(m =>
+                    m.TenantId == _tenant.TenantId && m.Status == MembershipStatus.Active)
+                && candidate.Roles.Any(r =>
+                    r.TenantId == _tenant.TenantId && r.Role == RoleType.TenantAdministrator),
+                ct);
+
+        if (!anotherActiveAdministratorExists)
+            throw new ConflictException(
+                "At least one active tenant administrator must remain.");
     }
 
     public async Task<UserResponse> GetAsync(Guid id, CancellationToken ct)
     {
         var user = await _db.Users
             .Include(u => u.Roles)
+            .Include(u => u.Memberships)
             .Include(u => u.LocationAssignments)
             .AsNoTracking()
             .FirstOrDefaultAsync(u => u.Id == id, ct)
             ?? throw new NotFoundException("User not found.");
-        return ToResponse(user);
+        return ToResponse(user, _tenant.TenantId);
     }
 
     public async Task<PagedResult<UserResponse>> ListAsync(PageQuery query, CancellationToken ct)
     {
         var q = _db.Users
             .Include(u => u.Roles)
+            .Include(u => u.Memberships)
             .Include(u => u.LocationAssignments)
             .AsNoTracking()
             .AsQueryable();
@@ -131,7 +266,7 @@ public sealed class UserService : IUserService
             .ToListAsync(ct);
 
         return new PagedResult<UserResponse>(
-            items.Select(ToResponse).ToArray(),
+            items.Select(u => ToResponse(u, _tenant.TenantId)).ToArray(),
             query.NormalizedPage,
             query.NormalizedPageSize,
             total);
@@ -166,14 +301,14 @@ public sealed class UserService : IUserService
         return distinct;
     }
 
-    private static UserResponse ToResponse(ApplicationUser u) => new(
+    private static UserResponse ToResponse(ApplicationUser u, Guid tenantId) => new(
         u.Id,
-        u.TenantId,
+        tenantId,
         u.FirstName,
         u.LastName,
         u.Email,
-        u.Status.ToString(),
-        u.Roles.Select(r => RoleNames.ToName(r.Role)).ToArray(),
-        u.LocationAssignments.Select(a => a.ParkingLocationId).ToArray(),
+        u.Memberships.FirstOrDefault(m => m.TenantId == tenantId)?.Status.ToString() ?? u.Status.ToString(),
+        u.Roles.Where(r => r.TenantId == tenantId).Select(r => RoleNames.ToName(r.Role)).ToArray(),
+        u.LocationAssignments.Where(a => a.TenantId == tenantId).Select(a => a.ParkingLocationId).ToArray(),
         u.CreatedAt);
 }
