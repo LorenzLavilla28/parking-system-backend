@@ -5,6 +5,7 @@ using ParkingSaaS.Application.Common.Exceptions;
 using ParkingSaaS.Contracts.Common;
 using ParkingSaaS.Contracts.Tenants;
 using ParkingSaaS.Domain.Locations;
+using ParkingSaaS.Domain.Sessions;
 using ParkingSaaS.Domain.Tenants;
 using ParkingSaaS.Domain.Users;
 
@@ -190,71 +191,98 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
         return ToResponse(tenant, activeLocations.Count);
     }
 
+    /// <summary>
+    /// Updates the platform-approved per-location capacity and synchronizes all
+    /// existing tenant locations so the tenant dashboard and entry guard use the
+    /// same capacity immediately.
+    /// </summary>
     public async Task<TenantResponse> UpdateCapacityAddonAsync(Guid id, UpdateTenantCapacityAddonRequest request, CancellationToken ct)
     {
-        var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == id, ct)
-            ?? throw new NotFoundException("Tenant not found.");
         if (request.AdditionalSlotCapacity < 0)
             throw new ConflictException("Additional capacity cannot be negative.");
         if (string.IsNullOrWhiteSpace(request.Reason))
             throw new ConflictException("A reason is required before changing capacity.");
 
-        var plan = tenant.SubscriptionPlan;
-        var effectiveMaximum = SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(
-            plan,
-            request.AdditionalSlotCapacity,
-            tenant.PurchasedSlotCapacityPerLocation,
-            tenant.CapacityPricingEnabled);
-        if (effectiveMaximum is { } maximumSlots)
+        TenantResponse? response = null;
+        await _db.ExecuteInTransactionAsync(async txct =>
         {
-            var largestActiveLocation = await _db.ParkingLocations
-                .Where(l => l.TenantId == id && l.Status == LocationStatus.Active)
-                .Select(l => (int?)l.SlotCapacity)
-                .MaxAsync(ct) ?? 0;
-            if (largestActiveLocation > maximumSlots)
-                throw new ConflictException($"capacity_addon_reduction_blocked: the requested capacity supports {maximumSlots} slots, but the largest active location uses {largestActiveLocation}.");
-        }
+            // Serialize the capacity change with location creation and other
+            // tenant-level provisioning changes.
+            await _db.LockTenantAsync(id, txct);
 
-        var previousCapacity = tenant.AdditionalSlotCapacity;
-        if (previousCapacity == request.AdditionalSlotCapacity)
-            return ToResponse(tenant, await ActiveLocationCountAsync(id, ct));
+            var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == id, txct)
+                ?? throw new NotFoundException("Tenant not found.");
 
-        var previousPrice = SubscriptionPlanRules.MonthlyPrice(
-            plan,
-            tenant.PurchasedSlotCapacityPerLocation,
-            previousCapacity,
-            tenant.CapacityPricingEnabled);
-        tenant.SetAdditionalSlotCapacity(request.AdditionalSlotCapacity);
-        if (!tenant.CapacityPricingEnabled && SubscriptionPlanRules.For(plan).MaximumSlotsPerLocation is { } baseMaximum)
-        {
-            tenant.SetPurchasedSlotCapacityPerLocation(baseMaximum);
-            tenant.SetCapacityPricingEnabled(true);
-        }
-        var newPrice = SubscriptionPlanRules.MonthlyPrice(
-            plan,
-            tenant.PurchasedSlotCapacityPerLocation,
-            tenant.AdditionalSlotCapacity,
-            tenant.CapacityPricingEnabled);
-        await AddAuditAsync(
-            id,
-            "tenant.capacity_addon_changed",
-            new
+            var plan = tenant.SubscriptionPlan;
+            var previousCapacity = tenant.AdditionalSlotCapacity;
+            var tenantChanged = previousCapacity != request.AdditionalSlotCapacity;
+            var previousPrice = SubscriptionPlanRules.MonthlyPrice(
+                plan,
+                tenant.PurchasedSlotCapacityPerLocation,
+                previousCapacity,
+                tenant.CapacityPricingEnabled);
+
+            if (tenantChanged)
             {
-                additionalSlotCapacity = previousCapacity,
-                monthlyPrice = previousPrice,
-            },
-            new
+                tenant.SetAdditionalSlotCapacity(request.AdditionalSlotCapacity);
+                if (!tenant.CapacityPricingEnabled && SubscriptionPlanRules.For(plan).MaximumSlotsPerLocation is { } baseMaximum)
+                {
+                    tenant.SetPurchasedSlotCapacityPerLocation(baseMaximum);
+                    tenant.SetCapacityPricingEnabled(true);
+                }
+            }
+
+            var effectiveMaximum = SubscriptionPlanRules.EffectiveMaximumSlotsPerLocation(
+                plan,
+                tenant.AdditionalSlotCapacity,
+                tenant.PurchasedSlotCapacityPerLocation,
+                tenant.CapacityPricingEnabled);
+            var locationChanges = await SynchronizeLocationCapacitiesAsync(id, effectiveMaximum, txct);
+
+            if (!tenantChanged && locationChanges.Count == 0)
             {
-                additionalSlotCapacity = request.AdditionalSlotCapacity,
-                purchasedSlotCapacityPerLocation = tenant.PurchasedSlotCapacityPerLocation,
-                monthlyPrice = newPrice,
-                effectiveDate = "Immediately",
-                billingImpact = "Monthly price recalculated from capacity; recurring collection is not configured in this workspace.",
-            },
-            request.Reason,
-            ct);
-        await _db.SaveChangesAsync(ct);
-        return ToResponse(tenant, await ActiveLocationCountAsync(id, ct));
+                response = ToResponse(tenant, await ActiveLocationCountAsync(id, txct));
+                return;
+            }
+
+            var newPrice = SubscriptionPlanRules.MonthlyPrice(
+                plan,
+                tenant.PurchasedSlotCapacityPerLocation,
+                tenant.AdditionalSlotCapacity,
+                tenant.CapacityPricingEnabled);
+            await AddAuditAsync(
+                id,
+                "tenant.capacity_addon_changed",
+                new
+                {
+                    additionalSlotCapacity = previousCapacity,
+                    monthlyPrice = previousPrice,
+                    locationCapacities = locationChanges
+                        .Select(change => new
+                        {
+                            locationId = change.LocationId,
+                            locationName = change.LocationName,
+                            slotCapacity = change.PreviousCapacity,
+                        })
+                        .ToArray(),
+                },
+                new
+                {
+                    additionalSlotCapacity = request.AdditionalSlotCapacity,
+                    purchasedSlotCapacityPerLocation = tenant.PurchasedSlotCapacityPerLocation,
+                    monthlyPrice = newPrice,
+                    effectiveCapacityPerLocation = effectiveMaximum,
+                    synchronizedLocationCount = locationChanges.Count,
+                    effectiveDate = "Immediately",
+                    billingImpact = "Monthly price recalculated from capacity; recurring collection is not configured in this workspace.",
+                },
+                request.Reason,
+                txct);
+            await _db.SaveChangesAsync(txct);
+            response = ToResponse(tenant, await ActiveLocationCountAsync(id, txct));
+        }, ct);
+
+        return response ?? throw new InvalidOperationException("Capacity update did not produce a tenant response.");
     }
 
     public async Task<TenantResponse> GetAsync(Guid id, CancellationToken ct)
@@ -334,6 +362,64 @@ public sealed class TenantProvisioningService : ITenantProvisioningService
 
     private async Task<int> ActiveLocationCountAsync(Guid tenantId, CancellationToken ct)
         => await _db.ParkingLocations.CountAsync(l => l.TenantId == tenantId && l.Status == LocationStatus.Active, ct);
+
+    private async Task<IReadOnlyList<LocationCapacityChange>> SynchronizeLocationCapacitiesAsync(
+        Guid tenantId,
+        int? effectiveMaximum,
+        CancellationToken ct)
+    {
+        if (effectiveMaximum is not { } targetCapacity)
+            return Array.Empty<LocationCapacityChange>();
+
+        // Lock in a stable order so a capacity change cannot race vehicle entry
+        // reservations at any affected location.
+        var locationIds = await _db.ParkingLocations
+            .Where(l => l.TenantId == tenantId)
+            .OrderBy(l => l.Id)
+            .Select(l => l.Id)
+            .ToArrayAsync(ct);
+        foreach (var locationId in locationIds)
+            await _db.LockLocationAsync(locationId, ct);
+
+        var locations = await _db.ParkingLocations
+            .Where(l => l.TenantId == tenantId)
+            .OrderBy(l => l.Id)
+            .ToListAsync(ct);
+
+        foreach (var location in locations)
+        {
+            var activeOccupancy = await _db.ParkingSessions.CountAsync(s =>
+                s.ParkingLocationId == location.Id &&
+                (s.Status == ParkingSessionStatus.ActiveUnpaid ||
+                 s.Status == ParkingSessionStatus.PaymentPending ||
+                 s.Status == ParkingSessionStatus.PaidExitWindow ||
+                 s.Status == ParkingSessionStatus.OverstayDue), ct);
+            if (activeOccupancy > targetCapacity)
+                throw new ConflictException($"capacity_below_occupancy: {location.Name} currently has {activeOccupancy} active vehicle(s), but the requested capacity is {targetCapacity} slots.");
+        }
+
+        var changes = new List<LocationCapacityChange>();
+        foreach (var location in locations)
+        {
+            if (location.SlotCapacity == targetCapacity)
+                continue;
+
+            changes.Add(new LocationCapacityChange(
+                location.Id,
+                location.Name,
+                location.SlotCapacity,
+                targetCapacity));
+            location.SetSlotCapacity(targetCapacity);
+        }
+
+        return changes;
+    }
+
+    private sealed record LocationCapacityChange(
+        Guid LocationId,
+        string LocationName,
+        int PreviousCapacity,
+        int NewCapacity);
 
     private async Task AddAuditAsync(
         Guid tenantId,

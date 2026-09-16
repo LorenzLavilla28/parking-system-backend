@@ -104,6 +104,35 @@ public sealed class PaymentTrackingServiceTests
     }
 
     [Fact]
+    public async Task Report_aggregates_the_full_filtered_result_not_the_requested_page()
+    {
+        var now = new DateTimeOffset(2026, 8, 18, 10, 0, 0, TimeSpan.Zero);
+        var tenantId = Guid.NewGuid();
+        var tenant = new MutableTenantContext();
+        tenant.ScopeTo(tenantId);
+        await using var db = InMemoryDb.Create(tenant);
+        var location = new ParkingLocation(tenantId, "Lot", "report-lot", "Asia/Manila", null);
+        var session = ParkingSession.RecordEntry(tenantId, location.Id, Guid.NewGuid(), "RPT 123", "RPT123",
+            VehicleType.Car, null, now.AddHours(-2), null);
+        db.ParkingLocations.Add(location);
+        db.ParkingSessions.Add(session);
+        db.Payments.AddRange(
+            Payment.CreateCashPaid(tenantId, session.Id, null, "PHP", 50m, "report-cash-1", "protected", now.AddMinutes(-30), "CR-1", Guid.NewGuid()),
+            Payment.CreateCashPaid(tenantId, session.Id, null, "PHP", 70m, "report-cash-2", "protected", now.AddMinutes(-20), "CR-2", Guid.NewGuid()),
+            Payment.CreateOnlinePending(tenantId, session.Id, Guid.NewGuid(), "PHP", 90m, "report-pending", "protected", "report-key"));
+        await db.SaveChangesAsync();
+
+        var service = new PaymentTrackingService(db, new FakeSessionPricingService(), new TestClock(now));
+        var report = await service.GetReportAsync(
+            new PaymentQueryRequest { Page = 2, PageSize = 1 }, CancellationToken.None);
+
+        report.TotalCount.Should().Be(3);
+        report.SuccessfulCount.Should().Be(2);
+        report.CollectedAmount.Should().Be(120m);
+        report.PendingCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task Override_activity_projects_session_audit_evidence()
     {
         var now = new DateTimeOffset(2026, 8, 5, 12, 0, 0, TimeSpan.Zero);

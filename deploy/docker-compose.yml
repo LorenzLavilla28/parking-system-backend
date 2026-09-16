@@ -39,7 +39,8 @@ services:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
-      AwsSecrets__Enabled: ${AWS_SECRETS_ENABLED:-true}
+      AWS_EC2_METADATA_DISABLED: ${AWS_EC2_METADATA_DISABLED:-true}
+      AwsSecrets__Enabled: ${AWS_SECRETS_ENABLED:-false}
       AwsSecrets__Region: ${AWS_REGION:-ap-southeast-1}
       PayMongo__WebhookBaseUrl: ${PAYMONGO_WEBHOOK_BASE_URL:-http://localhost:5274}
       # Email is disabled by default in Docker. Set EMAIL_ENABLED=true only after

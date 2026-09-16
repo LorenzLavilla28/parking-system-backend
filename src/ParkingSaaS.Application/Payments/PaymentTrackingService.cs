@@ -28,6 +28,17 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
 
     public async Task<PagedResult<PaymentSummaryResponse>> SearchAsync(PaymentQueryRequest request, CancellationToken ct)
     {
+        if (!string.IsNullOrWhiteSpace(request.Reconciliation))
+        {
+            var filteredRows = await LoadFilteredRowsAsync(request, ct);
+            var pageRows = filteredRows
+                .Skip((request.NormalizedPage - 1) * request.NormalizedPageSize)
+                .Take(request.NormalizedPageSize)
+                .ToArray();
+            return new PagedResult<PaymentSummaryResponse>(
+                pageRows, request.NormalizedPage, request.NormalizedPageSize, filteredRows.Count);
+        }
+
         var query = await BuildQueryAsync(request, ct);
         var total = await query.LongCountAsync(ct);
         var payments = await ApplyOrdering(query, request)
@@ -38,6 +49,25 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
 
         return new PagedResult<PaymentSummaryResponse>(
             rows.Select(ToContract).ToArray(), request.NormalizedPage, request.NormalizedPageSize, total);
+    }
+
+    public async Task<PaymentReportResponse> GetReportAsync(PaymentQueryRequest request, CancellationToken ct)
+    {
+        var rows = await LoadFilteredRowsAsync(request, ct, applyOrdering: false);
+        var successful = rows.Where(row => row.Status == PaymentStatus.Paid.ToString()).ToArray();
+        var pending = rows.LongCount(row => row.Status is nameof(PaymentStatus.Pending) or nameof(PaymentStatus.Processing));
+        var failed = rows.LongCount(row => row.Status is nameof(PaymentStatus.Failed) or nameof(PaymentStatus.Expired));
+        var overrideCash = successful.Where(row => row.IsOverrideRelated).ToArray();
+
+        return new PaymentReportResponse(
+            rows.Count,
+            successful.LongLength,
+            successful.Sum(row => row.Amount),
+            pending,
+            failed,
+            overrideCash.LongLength,
+            overrideCash.Sum(row => row.Amount),
+            rows.Select(row => row.Currency).FirstOrDefault() ?? "PHP");
     }
 
     public async Task<IReadOnlyList<PaymentOverrideResponse>> ListOverridesAsync(
@@ -170,14 +200,22 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
 
     public async Task<byte[]> ExportCsvAsync(PaymentQueryRequest request, CancellationToken ct)
     {
-        var payments = await ApplyOrdering(await BuildQueryAsync(request, ct), request)
-            .Take(10_000)
-            .ToListAsync(ct);
-        var rows = await LoadProjectionsAsync(payments, ct);
+        IReadOnlyList<PaymentSummaryResponse> rows;
+        if (string.IsNullOrWhiteSpace(request.Reconciliation))
+        {
+            var payments = await ApplyOrdering(await BuildQueryAsync(request, ct), request)
+                .Take(10_000)
+                .ToListAsync(ct);
+            rows = (await LoadProjectionsAsync(payments, ct)).Select(ToContract).ToArray();
+        }
+        else
+        {
+            rows = await LoadFilteredRowsAsync(request, ct);
+        }
 
         var sb = new StringBuilder();
         sb.AppendLine("Payment ID,Created At,Paid At,Plate,Location,Amount,Currency,Provider,Method,Status,Receipt Number,Provider Checkout ID,Provider Payment ID,Session Status,Entry Time,Exit Time,Final Fee,Total Paid,Current Fee,Balance Due,Override Cash");
-        foreach (var row in rows.Select(ToContract))
+        foreach (var row in rows)
         {
             sb.AppendLine(string.Join(',',
                 Csv(row.Id), Csv(row.CreatedAt), Csv(row.PaidAt), Csv(row.PlateNumberRaw), Csv(row.LocationName),
@@ -250,6 +288,53 @@ public sealed class PaymentTrackingService : IPaymentTrackingService
         // non-translatable DTO in SQL.
         return query.Where(p => _db.ParkingSessions.Any(s => s.Id == p.ParkingSessionId
             && _db.ParkingLocations.Any(l => l.Id == s.ParkingLocationId)));
+    }
+
+    private async Task<IReadOnlyList<PaymentSummaryResponse>> LoadFilteredRowsAsync(
+        PaymentQueryRequest request,
+        CancellationToken ct,
+        bool applyOrdering = true)
+    {
+        var query = await BuildQueryAsync(request, ct);
+        var payments = applyOrdering
+            ? await ApplyOrdering(query, request).ToListAsync(ct)
+            : await query.ToListAsync(ct);
+        var rows = (await LoadProjectionsAsync(payments, ct))
+            .Select(ToContract)
+            .ToArray();
+
+        return string.IsNullOrWhiteSpace(request.Reconciliation)
+            ? rows
+            : rows.Where(row => MatchesReconciliation(row, request.Reconciliation!)).ToArray();
+    }
+
+    private static bool MatchesReconciliation(PaymentSummaryResponse row, string filter)
+        => string.Equals(ReconciliationKey(row), filter.Trim(), StringComparison.OrdinalIgnoreCase);
+
+    private static string ReconciliationKey(PaymentSummaryResponse row)
+    {
+        if (row.Status == nameof(PaymentStatus.Refunded)) return "refunded";
+        if (row.Status == nameof(PaymentStatus.PartiallyRefunded)) return "partially-refunded";
+        if (row.Status is nameof(PaymentStatus.Failed)
+            or nameof(PaymentStatus.Expired)
+            or nameof(PaymentStatus.Cancelled))
+            return "needs-review";
+        if (row.Status is nameof(PaymentStatus.Pending) or nameof(PaymentStatus.Processing))
+            return string.Equals(row.Provider, nameof(PaymentProvider.Cash), StringComparison.OrdinalIgnoreCase)
+                ? "needs-review"
+                : "webhook-pending";
+        if (row.SessionStatus == nameof(ParkingSessionStatus.OverstayDue))
+            return "needs-review";
+        if (row.Status == nameof(PaymentStatus.Paid)
+            && !string.Equals(row.Provider, nameof(PaymentProvider.Cash), StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(row.ProviderPaymentId))
+            return "provider-mismatch";
+        var balanceDue = row.CurrentOutstanding ?? (row.CurrentFee is { } fee
+            ? Math.Max(0m, fee - row.TotalPaid)
+            : (decimal?)null);
+        return row.Status == nameof(PaymentStatus.Paid) && (balanceDue ?? 0m) > 0m
+            ? "needs-review"
+            : "reconciled";
     }
 
     private static IOrderedQueryable<Payment> ApplyOrdering(IQueryable<Payment> query, PaymentQueryRequest request)

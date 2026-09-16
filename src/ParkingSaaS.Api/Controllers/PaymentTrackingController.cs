@@ -19,6 +19,10 @@ public sealed class PaymentTrackingController : ApiControllerBase
     public async Task<IActionResult> Search([FromQuery] PaymentQueryRequest request, CancellationToken ct)
         => Ok(ApiResponse<PagedResult<PaymentSummaryResponse>>.Ok(await _payments.SearchAsync(request, ct)));
 
+    [HttpGet("report")]
+    public async Task<IActionResult> Report([FromQuery] PaymentQueryRequest request, CancellationToken ct)
+        => Ok(ApiResponse<PaymentReportResponse>.Ok(await _payments.GetReportAsync(request, ct)));
+
     [HttpGet("export")]
     public async Task<IActionResult> Export([FromQuery] PaymentQueryRequest request, CancellationToken ct)
         => File(await _payments.ExportCsvAsync(request, ct), "text/csv", $"payments-{DateTime.UtcNow:yyyyMMdd-HHmmss}.csv");

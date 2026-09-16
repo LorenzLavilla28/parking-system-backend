@@ -24,7 +24,8 @@ public sealed class TenantBrandingController : ApiControllerBase
     [HttpPost("logo")]
     [Authorize(Policy = AuthorizationPolicies.TenantAdmin)]
     [RequestSizeLimit(RequestLimitBytes)]
-    public async Task<IActionResult> UploadLogo([FromForm] IFormFile? file, CancellationToken ct)
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> UploadLogo(IFormFile? file, CancellationToken ct)
     {
         if (file is null)
             throw new ConflictException("Choose a logo file to upload.");

@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using ParkingSaaS.Application.Tenants;
 using ParkingSaaS.Contracts.Tenants;
+using ParkingSaaS.Domain.Locations;
 using ParkingSaaS.Domain.Emails;
 using ParkingSaaS.Domain.Users;
 using ParkingSaaS.Infrastructure.Identity;
@@ -108,6 +109,47 @@ public sealed class TenantProvisioningServiceTests
 
         updated.EffectiveMaximumSlotsPerLocation.Should().Be(15);
         updated.MonthlyPrice.Should().Be(2250m);
+    }
+
+    [Fact]
+    public async Task Changing_capacity_synchronizes_existing_locations()
+    {
+        var response = await _service.CreateAsync(new CreateTenantRequest(
+            "Small Parking", "small-parking", "Starter", "PHP", "Asia/Manila",
+            "Ada", "Admin", "ada@parking.test", "StrongPass!2026"), CancellationToken.None);
+        var location = new ParkingLocation(
+            response.Id, "Main Location", "main-location", "Asia/Manila", null, slotCapacity: 20);
+        _db.ParkingLocations.Add(location);
+        await _db.SaveChangesAsync();
+
+        var updated = await _service.UpdateCapacityAddonAsync(
+            response.Id,
+            new UpdateTenantCapacityAddonRequest(20, "Approved capacity expansion"),
+            CancellationToken.None);
+
+        updated.EffectiveMaximumSlotsPerLocation.Should().Be(40);
+        location.SlotCapacity.Should().Be(40);
+    }
+
+    [Fact]
+    public async Task Reapplying_capacity_reconciles_locations_already_using_the_old_capacity()
+    {
+        var response = await _service.CreateAsync(new CreateTenantRequest(
+            "Small Parking", "small-parking", "Starter", "PHP", "Asia/Manila",
+            "Ada", "Admin", "ada@parking.test", "StrongPass!2026"), CancellationToken.None);
+        var tenant = await _db.Tenants.IgnoreQueryFilters().SingleAsync();
+        tenant.SetAdditionalSlotCapacity(20);
+        var location = new ParkingLocation(
+            response.Id, "Main Location", "main-location", "Asia/Manila", null, slotCapacity: 20);
+        _db.ParkingLocations.Add(location);
+        await _db.SaveChangesAsync();
+
+        await _service.UpdateCapacityAddonAsync(
+            response.Id,
+            new UpdateTenantCapacityAddonRequest(20, "Reconcile approved capacity"),
+            CancellationToken.None);
+
+        location.SlotCapacity.Should().Be(40);
     }
 
     [Fact]

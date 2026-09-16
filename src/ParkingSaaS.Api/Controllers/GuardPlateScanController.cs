@@ -33,8 +33,9 @@ public sealed class GuardPlateScanController : ApiControllerBase
     [HttpPost]
     [EnableRateLimiting(PlateScanRateLimitPolicy.Name)]
     [RequestSizeLimit(25 * 1024 * 1024)]
+    [Consumes("multipart/form-data")]
     [ProducesResponseType(typeof(ApiResponse<PlateScanResponse>), StatusCodes.Status200OK)]
-    public async Task<IActionResult> Scan([FromForm] IFormFile? image, CancellationToken ct)
+    public async Task<IActionResult> Scan(IFormFile? image, CancellationToken ct)
     {
         if (image is null || image.Length == 0)
             return BadRequest(new { message = "An image file is required." });

@@ -24,7 +24,7 @@ WORKDIR /app
 # Paddle Inference uses OpenMP for CPU inference. The OpenCV slim runtime and
 # Paddle/OpenBLAS native libraries are supplied by NuGet packages.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 \
+    && apt-get install -y --no-install-recommends libgomp1 libgssapi-krb5-2 \
     && rm -rf /var/lib/apt/lists/*
 
 # .NET Linux images include the non-root `app` user (UID 1654).

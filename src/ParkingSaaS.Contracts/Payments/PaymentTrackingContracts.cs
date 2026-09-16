@@ -12,6 +12,7 @@ public sealed class PaymentQueryRequest
     public Guid? SessionId { get; init; }
     public DateTimeOffset? From { get; init; }
     public DateTimeOffset? To { get; init; }
+    public string? Reconciliation { get; init; }
     public string? SortBy { get; init; }
     public string? SortDirection { get; init; }
     public bool OverrideOnly { get; init; }
@@ -50,6 +51,16 @@ public sealed record PaymentSummaryResponse(
     decimal? CurrentOutstanding = null,
     bool IsOverrideRelated = false,
     string? OverrideLabel = null);
+
+public sealed record PaymentReportResponse(
+    long TotalCount,
+    long SuccessfulCount,
+    decimal CollectedAmount,
+    long PendingCount,
+    long FailedCount,
+    long OverrideCashCount,
+    decimal OverrideCashAmount,
+    string Currency);
 
 public sealed class PaymentOverrideQueryRequest
 {
